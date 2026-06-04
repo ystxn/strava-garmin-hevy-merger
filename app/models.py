@@ -87,6 +87,7 @@ class StravaActivity(BaseModel):
     start_date_local: Optional[str] = None
     elapsed_time: Optional[int] = None
     moving_time: Optional[int] = None
+    utc_offset: Optional[float] = None
     device_name: Optional[str] = None
     description: Optional[str] = None
     has_heartrate: bool = False

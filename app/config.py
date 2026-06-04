@@ -12,7 +12,7 @@ ConfigMap (envFrom configMapRef); locally they can come from a .env file.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     strength_sport_types: tuple[str, ...] = ("WeightTraining",)
     # Preferred weight unit emitted in the merged payload.
     weight_units: str = "kilograms"
+    # exercise_type used when a Hevy exercise name can't be mapped to a Strava
+    # enum (a per-category generic is tried first). Configurable so it can be
+    # corrected without a code change if Strava rejects it.
+    fallback_exercise_type: str = "WEIGHT_TRAINING_GENERIC"
+    # Bearer token guarding the manual POST /merge endpoint. When unset, the
+    # endpoint is disabled (returns 503).
+    admin_token: Optional[str] = None
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -112,6 +119,8 @@ class Settings(BaseSettings):
             "subscription_retry_min_seconds": self.subscription_retry_min_seconds,
             "strength_sport_types": list(self.strength_sport_types),
             "weight_units": self.weight_units,
+            "fallback_exercise_type": self.fallback_exercise_type,
+            "admin_endpoint_enabled": self.admin_token is not None,
         }
 
 

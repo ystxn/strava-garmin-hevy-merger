@@ -9,6 +9,7 @@ stage-specific diagnostic logs the spec mandates without re-deriving anything.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -202,9 +203,19 @@ class StravaClient:
 
     # -- uploads -----------------------------------------------------------
 
-    async def create_upload(self, payload: dict[str, Any]) -> UploadResult:
+    async def create_upload(
+        self, payload: dict[str, Any], *, sport_type: str
+    ) -> UploadResult:
+        # Strava's structured strength format is a multipart file upload: the
+        # JSON payload is sent as a `file` with data_type=json, not a JSON body.
         url = f"{API_BASE}/uploads"
-        resp = await self._request("POST", url, json=payload)
+        file_bytes = json.dumps(payload).encode("utf-8")
+        resp = await self._request(
+            "POST",
+            url,
+            files={"file": ("merged.json", file_bytes, "application/json")},
+            data={"data_type": "json", "sport_type": sport_type},
+        )
         if resp.status_code not in (200, 201):
             raise StravaApiError(
                 f"POST upload returned {resp.status_code}",

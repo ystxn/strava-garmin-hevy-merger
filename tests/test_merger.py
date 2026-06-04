@@ -9,6 +9,7 @@ from app.merger import (
     identify_source,
     is_probably_merged,
     required_payload_problems,
+    unmapped_exercise_names,
 )
 
 from .conftest import garmin_activity, hevy_activity, make_activity
@@ -104,29 +105,53 @@ def test_identify_pair_matches_real_strava_pair_without_sets_array() -> None:
     assert identify_pair(garmin, hevy) == (garmin, hevy)
 
 
-# --- build_merged_payload --------------------------------------------------
+# --- build_merged_payload (Strava JSON strength shape) ----------------------
 
 
 def test_build_merged_payload_shape(settings: Settings) -> None:
     g = garmin_activity()
-    h = hevy_activity()
+    h = hevy_activity()  # Bench Press 5x80kg, Back Squat 5x100 (no units)
     payload = build_merged_payload(g, h, [70, 72, 75], [0, 1, 2], settings)
 
-    assert payload["sport_type"] == "WeightTraining"
+    assert payload["version"] == "1.0"
     assert payload["start_time"] == "2026-01-01T10:00:00Z"
     assert payload["elapsed_time"] == 3600
-    assert payload["visibility"] == "only_me"
-    assert payload["streams"]["heartrate"]["data"] == [70, 72, 75]
-    assert payload["streams"]["time"]["data"] == [0, 1, 2]
+    # Streams are bare arrays, not {"data": [...]}.
+    assert payload["streams"]["heartrate"] == [70, 72, 75]
+    assert payload["streams"]["time"] == [0, 1, 2]
 
     assert len(payload["sets"]) == 2
-    first = payload["sets"][0]
-    assert first["exercise"]["name"] == "Bench Press"
-    assert first["reps"] == 5
-    assert first["weight"] == 80.0
-    assert first["weight_units"] == "kilograms"
-    # Second set had no explicit units -> falls back to the configured default.
-    assert payload["sets"][1]["weight_units"] == settings.weight_units
+    # Mapped to Strava exercise_type enums; no name/reps/weight_units keys.
+    assert payload["sets"][0] == {
+        "exercise_type": "BENCH_PRESS_GENERIC",
+        "repetitions": 5,
+        "weight": 80.0,
+    }
+    assert payload["sets"][1]["exercise_type"] == "SQUAT_GENERIC"
+    assert payload["sets"][1]["weight"] == 100.0
+
+
+def test_build_merged_payload_utc_offset_and_active_time(settings: Settings) -> None:
+    g = garmin_activity(utc_offset=28800.0, moving_time=383)
+    payload = build_merged_payload(g, hevy_activity(), [70], [0], settings)
+    assert payload["utc_offset"] == 28800  # coerced to int
+    assert payload["active_time"] == 383
+
+
+def test_build_merged_payload_converts_pounds_to_kg(settings: Settings) -> None:
+    h = make_activity(
+        id=222,
+        sets=[
+            {
+                "exercise": {"name": "Bench Press"},
+                "reps": 5,
+                "weight": 100.0,
+                "weight_units": "pounds",
+            }
+        ],
+    )
+    payload = build_merged_payload(garmin_activity(), h, [70], [0], settings)
+    assert payload["sets"][0]["weight"] == 45.36  # 100 * 0.45359237, 2 dp
 
 
 def test_build_merged_payload_handles_alternate_set_fields(
@@ -136,19 +161,19 @@ def test_build_merged_payload_handles_alternate_set_fields(
         id=222,
         sets=[{"exercise_name": "Deadlift", "repetitions": 3, "weight_kg": 140.0}],
     )
-    g = garmin_activity()
-    payload = build_merged_payload(g, h, [60], [0], settings)
+    payload = build_merged_payload(garmin_activity(), h, [60], [0], settings)
     s = payload["sets"][0]
-    assert s["exercise"]["name"] == "Deadlift"
-    assert s["reps"] == 3
+    assert s["exercise_type"] == "DEADLIFT_GENERIC"
+    assert s["repetitions"] == 3
     assert s["weight"] == 140.0
 
 
-def test_build_merged_payload_missing_name_defaults(settings: Settings) -> None:
-    h = make_activity(id=222, sets=[{"reps": 10, "weight": 20.0}])
-    g = garmin_activity()
-    payload = build_merged_payload(g, h, [60], [0], settings)
-    assert payload["sets"][0]["exercise"]["name"] == "Unknown Exercise"
+def test_build_merged_payload_unmapped_uses_fallback(settings: Settings) -> None:
+    h = make_activity(
+        id=222, sets=[{"exercise": {"name": "Frobnicator 3000"}, "reps": 5}]
+    )
+    payload = build_merged_payload(garmin_activity(), h, [60], [0], settings)
+    assert payload["sets"][0]["exercise_type"] == settings.fallback_exercise_type
 
 
 def test_build_merged_payload_parses_sets_from_description(
@@ -164,16 +189,27 @@ def test_build_merged_payload_parses_sets_from_description(
             "Set 1: 55 kg x 6\nSet 2: 60 kg x 6\n"
         ),
     )
-    g = garmin_activity()
-    payload = build_merged_payload(g, h, [70, 72], [0, 1], settings)
+    payload = build_merged_payload(garmin_activity(), h, [70, 72], [0, 1], settings)
 
     assert len(payload["sets"]) == 2
-    assert payload["sets"][0]["exercise"]["name"] == "Deadlift (Barbell)"
-    assert payload["sets"][0]["weight"] == 55.0
-    assert payload["sets"][0]["reps"] == 6
-    assert payload["sets"][0]["weight_units"] == "kilograms"
+    assert payload["sets"][0] == {
+        "exercise_type": "BARBELL_DEADLIFT",
+        "repetitions": 6,
+        "weight": 55.0,
+    }
     assert payload["sets"][1]["weight"] == 60.0
     assert required_payload_problems(payload) == []
+
+
+def test_unmapped_exercise_names_lists_only_unmatched(settings: Settings) -> None:
+    h = make_activity(
+        id=222,
+        sets=[
+            {"exercise": {"name": "Frobnicator 3000"}, "reps": 5},
+            {"exercise": {"name": "Deadlift (Barbell)"}, "reps": 5},
+        ],
+    )
+    assert unmapped_exercise_names(h, settings) == ["Frobnicator 3000"]
 
 
 # --- required_payload_problems ---------------------------------------------
@@ -197,3 +233,9 @@ def test_required_payload_problems_flags_missing_start(settings: Settings) -> No
     g = garmin_activity(start_date=None)
     payload = build_merged_payload(g, hevy_activity(), [70], [0], settings)
     assert any("start_time" in p for p in required_payload_problems(payload))
+
+
+def test_required_payload_problems_flags_no_sets(settings: Settings) -> None:
+    h = make_activity(id=222, sets=[], description=None)
+    payload = build_merged_payload(garmin_activity(), h, [70], [0], settings)
+    assert "no sets in payload" in required_payload_problems(payload)

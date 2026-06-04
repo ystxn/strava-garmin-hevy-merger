@@ -34,11 +34,13 @@ from .logging_setup import (
 )
 from .matcher import Matcher, PendingActivity, _utcnow
 from .merger import (
+    MERGED_SPORT_TYPE,
     build_merged_payload,
     identify_pair,
     identify_source,
     is_probably_merged,
     required_payload_problems,
+    unmapped_exercise_names,
 )
 from .models import StravaActivity, WebhookEvent
 from .strava import StravaApiError, StravaClient
@@ -225,6 +227,115 @@ async def receive_webhook(request: Request) -> JSONResponse:
 
     _schedule(ctx, process_event(ctx, event))
     return JSONResponse({"status": "received"})
+
+
+@app.post("/merge")
+async def manual_merge(request: Request) -> JSONResponse:
+    """Manually merge two given Strava activity IDs (testing / ops).
+
+    Guarded by ``ADMIN_TOKEN``. ``dry_run`` builds and returns the payload
+    without uploading or deleting; otherwise runs the full pipeline (honouring
+    ``DELETE_ORIGINALS``). Runs synchronously so the response carries the
+    outcome. Roles are resolved from the activities themselves, so the order of
+    ``garmin_id``/``hevy_id`` does not matter.
+    """
+    ctx: AppContext = request.app.state.ctx
+    settings = ctx.settings
+
+    if not settings.admin_token:
+        return JSONResponse(
+            {"status": "disabled", "detail": "ADMIN_TOKEN is not configured"},
+            status_code=503,
+        )
+    auth = request.headers.get("authorization", "")
+    token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+    if token != settings.admin_token:
+        return JSONResponse({"status": "unauthorized"}, status_code=401)
+
+    try:
+        body = await request.json()
+        garmin_id = int(body["garmin_id"])
+        hevy_id = int(body["hevy_id"])
+    except (ValueError, TypeError, KeyError):
+        return JSONResponse(
+            {
+                "status": "bad_request",
+                "detail": "JSON body with integer garmin_id and hevy_id required",
+            },
+            status_code=400,
+        )
+    dry_run = bool(body.get("dry_run", False))
+
+    log_stage_event(
+        ctx.logger,
+        f"Manual merge requested (dry_run={dry_run})",
+        stage="manual_merge",
+        garmin_activity_id=garmin_id,
+        hevy_activity_id=hevy_id,
+    )
+
+    garmin = await _fetch_for_merge(ctx, garmin_id)
+    hevy = await _fetch_for_merge(ctx, hevy_id)
+    if garmin is None or hevy is None:
+        return JSONResponse(
+            {
+                "status": "fetch_failed",
+                "detail": "could not fetch one or both activities",
+            },
+            status_code=502,
+        )
+
+    athlete_id = garmin.athlete_id or hevy.athlete_id or 0
+    result = await run_merge(ctx, athlete_id, garmin, hevy, dry_run=dry_run)
+    status_code = {
+        "merged": 200,
+        "dry_run": 200,
+        "no_op": 422,
+        "incomplete": 422,
+        "error": 502,
+    }.get(result.get("status"), 200)
+    return JSONResponse(result, status_code=status_code)
+
+
+async def _fetch_for_merge(
+    ctx: AppContext, activity_id: int
+) -> StravaActivity | None:
+    """Fetch one activity for a manual merge; log schema drift; None on failure."""
+    try:
+        fetched = await ctx.strava.get_activity(activity_id)
+    except StravaApiError as exc:
+        log_stage_error(
+            ctx.logger,
+            "Failed to fetch activity for manual merge",
+            stage="activity_fetch",
+            activity_id=activity_id,
+            http_method=exc.method,
+            url=exc.url,
+            http_status=exc.status_code,
+            error=str(exc),
+            parse_error=exc.parse_error,
+            **clip_body(exc.body),
+        )
+        return None
+    except Exception as exc:
+        log_stage_error(
+            ctx.logger,
+            "Unexpected error fetching activity for manual merge",
+            stage="activity_fetch",
+            activity_id=activity_id,
+            error=f"{type(exc).__name__}: {exc}",
+        )
+        return None
+
+    activity = fetched.activity
+    if activity.model_extra:
+        log_unexpected_fields(
+            ctx.logger,
+            context="activity_detail",
+            unexpected=activity.model_extra,
+            activity_id=activity_id,
+        )
+    return activity
 
 
 # --------------------------------------------------------------------------- #
@@ -417,14 +528,22 @@ async def run_merge(
     athlete_id: int,
     activity_a: StravaActivity,
     activity_b: StravaActivity,
-) -> None:
-    """Identify the pair, fetch HR, build, upload, and optionally delete."""
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Identify the pair, fetch HR, build, and (unless dry_run) upload + delete.
+
+    Returns a result dict describing the outcome so callers (notably the manual
+    POST /merge endpoint) can report it: ``status`` is one of ``no_op``,
+    ``error``, ``incomplete``, ``dry_run`` or ``merged``.
+    """
     log = ctx.logger
     settings = ctx.settings
 
     # --- Stage: source_identification ------------------------------------
     pair = identify_pair(activity_a, activity_b)
     if pair is None:
+        reason = "no assignment satisfies garmin(HR/device) + hevy(sets/device)"
         log_stage_error(
             log,
             "Could not identify Garmin/Hevy roles; leaving both activities "
@@ -441,9 +560,9 @@ async def run_merge(
             activity_b_device_name=activity_b.device_name,
             activity_b_has_sets=activity_b.has_sets,
             activity_b_has_heartrate=activity_b.has_heartrate,
-            reason="no assignment satisfies hevy.has_sets and garmin.has_heartrate",
+            reason=reason,
         )
-        return
+        return {"status": "no_op", "reason": reason}
 
     garmin, hevy = pair
     g_id, h_id = garmin.id, hevy.id
@@ -455,6 +574,22 @@ async def run_merge(
         garmin_activity_id=g_id,
         hevy_activity_id=h_id,
     )
+
+    # Surface any Hevy exercises that fell through to the fallback enum, so the
+    # curated map / config can be extended.
+    unmapped = unmapped_exercise_names(hevy, settings)
+    if unmapped:
+        log_stage_event(
+            log,
+            f"{len(unmapped)} Hevy exercise(s) had no exercise_type mapping; "
+            f"using fallback '{settings.fallback_exercise_type}'",
+            stage="exercise_mapping",
+            level=logging.WARNING,
+            athlete_id=athlete_id,
+            garmin_activity_id=g_id,
+            hevy_activity_id=h_id,
+            unmapped_exercises=unmapped,
+        )
 
     # --- Stage: stream_fetch (Garmin HR + time) --------------------------
     keys = ["heartrate", "time"]
@@ -477,7 +612,7 @@ async def run_merge(
             time_sample_count=None,
             **clip_body(exc.body),
         )
-        return
+        return {"status": "error", "reason": "stream_fetch_failed"}
 
     hr_stream = streams.streams.get("heartrate")
     time_stream = streams.streams.get("time")
@@ -502,7 +637,7 @@ async def run_merge(
             include_traceback=False,
             **clip_body(json.dumps(streams.raw)),
         )
-        return
+        return {"status": "error", "reason": "no_heartrate"}
 
     # --- Stage: payload_build --------------------------------------------
     try:
@@ -523,7 +658,7 @@ async def run_merge(
             constructed_payload=None,
             error=f"{type(exc).__name__}: {exc}",
         )
-        return
+        return {"status": "error", "reason": "payload_build_failed"}
 
     problems = required_payload_problems(payload)
     if problems:
@@ -543,7 +678,7 @@ async def run_merge(
             error="; ".join(problems),
             include_traceback=False,
         )
-        return
+        return {"status": "incomplete", "problems": problems, "payload": payload}
 
     log_stage_event(
         log,
@@ -555,10 +690,24 @@ async def run_merge(
         hevy_activity_id=h_id,
     )
 
+    if dry_run:
+        log_stage_event(
+            log,
+            "Dry run: built and validated payload; skipping upload and delete",
+            stage="upload",
+            athlete_id=athlete_id,
+            garmin_activity_id=g_id,
+            hevy_activity_id=h_id,
+        )
+        return {"status": "dry_run", "payload": payload}
+
     # --- Stage: upload ---------------------------------------------------
-    merged_id = await _upload_and_poll(ctx, payload, athlete_id, g_id, h_id)
+    sport_type = garmin.sport_type or MERGED_SPORT_TYPE
+    merged_id = await _upload_and_poll(
+        ctx, payload, sport_type, athlete_id, g_id, h_id
+    )
     if merged_id is None:
-        return
+        return {"status": "error", "reason": "upload_failed", "payload": payload}
 
     ctx.processed_activity_ids.add(merged_id)
     log_stage_event(
@@ -596,10 +745,13 @@ async def run_merge(
             merged_activity_id=merged_id,
         )
 
+    return {"status": "merged", "merged_activity_id": merged_id}
+
 
 async def _upload_and_poll(
     ctx: AppContext,
     payload: dict[str, Any],
+    sport_type: str,
     athlete_id: int,
     g_id: int | None,
     h_id: int | None,
@@ -609,7 +761,7 @@ async def _upload_and_poll(
     settings = ctx.settings
 
     try:
-        result = await ctx.strava.create_upload(payload)
+        result = await ctx.strava.create_upload(payload, sport_type=sport_type)
     except StravaApiError as exc:
         log_stage_error(
             log,
