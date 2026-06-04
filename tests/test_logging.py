@@ -10,6 +10,7 @@ from app.logging_setup import (
     MAX_BODY_BYTES,
     clip_body,
     configure_logging,
+    log_raw_response,
     log_stage_error,
 )
 
@@ -29,6 +30,42 @@ def test_clip_body_large_is_clipped() -> None:
     assert out["response_body_truncated"] is True
     assert out["response_body_total_bytes"] == len(big)
     assert len(out["response_body"].encode("utf-8")) <= HEAD_BYTES
+
+
+def test_log_raw_response_round_trips_full_body(capsys) -> None:
+    # The raw-payload diagnostic must dump the COMPLETE body verbatim (unlike
+    # the schema-drift warning, which hides declared fields and truncates
+    # values), so a real Strava payload can be reconstructed from logs alone.
+    configure_logging("INFO")
+    logger = logging.getLogger("test.raw")
+    raw = {
+        "id": 222,
+        "external_id": "hevy-abc",
+        "description": "Logged with hevyapp.com\nDeadlift\nSet 1: 55 kg x 6",
+        "sets": [],
+        "segment_efforts": [],
+    }
+    log_raw_response(
+        logger,
+        "Fetched activity detail (raw)",
+        context="activity_detail",
+        raw=raw,
+        activity_id=222,
+    )
+    record = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert record["stage"] == "raw_payload"
+    assert record["context"] == "activity_detail"
+    assert record["activity_id"] == 222
+    assert json.loads(record["response_body"]) == raw
+
+
+def test_log_raw_response_clips_huge_body(capsys) -> None:
+    configure_logging("INFO")
+    logger = logging.getLogger("test.raw2")
+    raw = {"blob": "x" * (MAX_BODY_BYTES + 1000)}
+    log_raw_response(logger, "big", context="activity_detail", raw=raw)
+    record = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert record["response_body_truncated"] is True
 
 
 def test_log_stage_error_emits_json_with_envelope(capsys) -> None:

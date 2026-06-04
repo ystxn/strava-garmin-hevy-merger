@@ -12,6 +12,7 @@ This module centralises that behaviour so the rest of the app just calls
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sys
@@ -200,6 +201,36 @@ def log_stage_error(
     if include_traceback and sys.exc_info()[0] is not None:
         extra["traceback"] = traceback.format_exc()
     logger.error(message, extra=_clean_extra(extra))
+
+
+def log_raw_response(
+    logger: logging.Logger,
+    message: str,
+    *,
+    context: str,
+    raw: Any,
+    activity_id: int | None = None,
+    **fields: Any,
+) -> None:
+    """Log a full raw response body verbatim, for offline payload analysis.
+
+    Unlike :func:`log_unexpected_fields` — which only surfaces *undeclared*
+    fields and truncates each value to 500 chars — this dumps the entire body,
+    clipped only when it exceeds ``MAX_BODY_BYTES``. Use it to capture the
+    complete Strava activity-detail payload so the real (undocumented) schema,
+    including where strength sets actually live, can be inspected.
+    """
+    body = raw if isinstance(raw, str) else json.dumps(raw, default=str, sort_keys=True)
+    log_stage_event(
+        logger,
+        message,
+        stage="raw_payload",
+        level=logging.INFO,
+        activity_id=activity_id,
+        context=context,
+        **clip_body(body),
+        **fields,
+    )
 
 
 def log_unexpected_fields(

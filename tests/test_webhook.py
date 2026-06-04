@@ -363,6 +363,40 @@ async def test_accepted_webhook_logs_full_raw_body(capsys) -> None:
 
 
 @pytest.mark.usefixtures("merge_env")
+async def test_activity_detail_raw_payload_is_logged(capsys) -> None:
+    # Every fetched activity-detail body is logged in full so the real Strava
+    # schema (including where strength sets actually live) can be analysed
+    # offline from logs alone.
+    with respx.mock(assert_all_called=False) as router:
+        _register_common_routes(router)
+        async with LifespanManager(app):
+            ctx = app.state.ctx
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url=BASE_URL
+            ) as client:
+                await client.post("/webhook", json=_event(222))
+                await _drain(ctx)
+
+    records = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip().startswith("{")
+    ]
+    raw_logs = [
+        r
+        for r in records
+        if r.get("stage") == "raw_payload" and r.get("activity_id") == 222
+    ]
+    assert raw_logs, "expected a raw_payload log for the fetched activity"
+    body = json.loads(raw_logs[0]["response_body"])
+    # The complete fetched body is present, including fields we don't model.
+    assert body["id"] == 222
+    assert body["external_id"] == "hevy-abc"
+    assert "sets" in body
+
+
+@pytest.mark.usefixtures("merge_env")
 async def test_malformed_webhook_acknowledged() -> None:
     with respx.mock(assert_all_called=False) as router:
         _register_common_routes(router)
