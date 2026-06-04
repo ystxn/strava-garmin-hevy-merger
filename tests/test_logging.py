@@ -73,6 +73,37 @@ def test_log_stage_error_no_traceback_without_active_exception(capsys) -> None:
     assert "traceback" not in record
 
 
+def test_health_access_logs_are_suppressed(capsys) -> None:
+    # uvicorn.access logs every request; /health probes fire constantly and
+    # drown out real events, so they must be filtered while others pass.
+    configure_logging("INFO")
+    access = logging.getLogger("uvicorn.access")
+    fmt = '%s - "%s %s HTTP/%s" %d'
+    access.info(fmt, "10.0.0.1:1", "GET", "/health", "1.1", 200)
+    access.info(fmt, "10.0.0.1:2", "GET", "/health?probe=1", "1.1", 200)
+    access.info(fmt, "10.0.0.1:3", "POST", "/webhook", "1.1", 200)
+    out = capsys.readouterr().out
+    assert "/health" not in out
+    assert "/webhook" in out
+
+
+def test_client_secret_is_redacted_in_logs(capsys) -> None:
+    # httpx logs full request URLs at INFO; Strava's GET/DELETE put
+    # client_secret in the query string, which must never reach the logs.
+    configure_logging("INFO")
+    logging.getLogger("httpx").info(
+        'HTTP Request: %s %s "%s"',
+        "GET",
+        "https://www.strava.com/api/v3/push_subscriptions"
+        "?client_id=255222&client_secret=topsecretvalue123",
+        "HTTP/1.1 200 OK",
+    )
+    out = capsys.readouterr().out
+    assert "topsecretvalue123" not in out
+    assert "client_secret=<redacted>" in out
+    assert "client_id=255222" in out  # non-secret identifier is preserved
+
+
 def test_reserved_key_is_renamed(capsys) -> None:
     # "name" collides with a LogRecord attribute and must be renamed, not crash.
     configure_logging("INFO")

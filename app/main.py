@@ -118,17 +118,18 @@ async def lifespan(app: FastAPI):
             extra={"stage": "startup", "traceback": traceback.format_exc()},
         )
 
-    # The eviction loop runs forever; track it apart from the per-event
-    # background tasks so callers can drain the latter without awaiting it.
+    # These loops run forever; track them apart from the per-event background
+    # tasks so callers can drain the latter without awaiting these.
     eviction_task = asyncio.create_task(matcher.eviction_loop())
+    long_running = [eviction_task]
 
     if settings.manage_webhook_subscription:
-        _schedule(ctx, _setup_subscription(ctx))
+        long_running.append(asyncio.create_task(_subscription_loop(ctx)))
 
     try:
         yield
     finally:
-        all_tasks = [eviction_task, *ctx.background_tasks]
+        all_tasks = [*long_running, *ctx.background_tasks]
         for task in all_tasks:
             task.cancel()
         for task in all_tasks:
@@ -800,76 +801,100 @@ async def _delete_original(
 # --------------------------------------------------------------------------- #
 
 
-async def _setup_subscription(ctx: AppContext) -> None:
-    """Verify the push subscription exists, creating it if needed.
+async def _ensure_subscription(ctx: AppContext, *, announce_present: bool) -> None:
+    """One pass: make sure exactly our push subscription exists.
 
-    Runs as a background task (not awaited in startup) because creating a
-    subscription makes Strava call back to our /webhook for validation — which
-    only works once this server is actually accepting requests. We retry a few
-    times to cover the brief window before the socket is serving.
+    Lists subscriptions, returns if ours is already present, deletes any stale
+    one pointing elsewhere (Strava allows one per application), then creates
+    ours. Raises :class:`StravaApiError` (carrying the response body) on any
+    API failure so the caller can log and retry.
+
+    Creating the subscription makes Strava call back to our /webhook over HTTPS
+    for synchronous validation, so this only succeeds once the server is
+    publicly reachable with a valid TLS cert.
+
+    ``announce_present`` logs an already-present subscription at INFO on the
+    first check and DEBUG thereafter, so steady-state re-verification is quiet.
     """
     log = ctx.logger
     settings = ctx.settings
     callback = settings.webhook_callback_url
 
-    for attempt in range(1, 6):
+    subs = await ctx.strava.list_subscriptions()
+    existing = next((s for s in subs if s.callback_url == callback), None)
+    if existing:
+        log_stage_event(
+            log,
+            "Webhook subscription present",
+            stage="subscription_setup",
+            level=logging.INFO if announce_present else logging.DEBUG,
+            subscription_id=existing.id,
+            callback_url=callback,
+        )
+        return
+
+    for stale in subs:
+        log_stage_event(
+            log,
+            "Deleting stale subscription with a different callback",
+            stage="subscription_setup",
+            level=logging.WARNING,
+            subscription_id=stale.id,
+            stale_callback_url=stale.callback_url,
+        )
+        await ctx.strava.delete_subscription(stale.id)
+
+    created = await ctx.strava.create_subscription(
+        callback, settings.strava_webhook_verify_token
+    )
+    log_stage_event(
+        log,
+        "Created webhook subscription",
+        stage="subscription_setup",
+        subscription_id=created.id,
+        callback_url=callback,
+    )
+
+
+async def _subscription_loop(ctx: AppContext) -> None:
+    """Ensure the push subscription exists, then keep re-verifying forever.
+
+    Strava validates our callback synchronously at creation time, so a fresh
+    deploy can 400 for the first minute or two while the ingress and its TLS
+    cert come up. Rather than give up after a fixed budget — which would leave
+    the service permanently deaf to events — we back off and keep trying, then
+    settle into a slow steady-state poll that also recreates a subscription
+    Strava drops later. Strava's error body is logged on every failure.
+    """
+    log = ctx.logger
+    settings = ctx.settings
+    first_check = True
+    backoff = settings.subscription_retry_min_seconds
+
+    while True:
         try:
-            subs = await ctx.strava.list_subscriptions()
-            existing = next(
-                (s for s in subs if s.callback_url == callback), None
-            )
-            if existing:
-                log_stage_event(
-                    log,
-                    "Webhook subscription already present",
-                    stage="subscription_setup",
-                    subscription_id=existing.id,
-                    callback_url=callback,
-                )
-                return
-
-            # Strava allows one subscription per application; clear any stale
-            # one pointing elsewhere before creating ours.
-            for stale in subs:
-                log_stage_event(
-                    log,
-                    "Deleting stale subscription with a different callback",
-                    stage="subscription_setup",
-                    level=logging.WARNING,
-                    subscription_id=stale.id,
-                    stale_callback_url=stale.callback_url,
-                )
-                await ctx.strava.delete_subscription(stale.id)
-
-            created = await ctx.strava.create_subscription(
-                callback, settings.strava_webhook_verify_token
-            )
-            log_stage_event(
-                log,
-                "Created webhook subscription",
-                stage="subscription_setup",
-                subscription_id=created.id,
-                callback_url=callback,
-            )
-            return
+            await _ensure_subscription(ctx, announce_present=first_check)
+            first_check = False
+            backoff = settings.subscription_retry_min_seconds
+            await asyncio.sleep(settings.subscription_check_interval_seconds)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             log_stage_event(
                 log,
-                f"Subscription setup attempt {attempt} failed; will retry",
+                "Could not ensure webhook subscription; will retry",
                 stage="subscription_setup",
                 level=logging.WARNING,
+                callback_url=settings.webhook_callback_url,
+                http_status=getattr(exc, "status_code", None),
                 error=f"{type(exc).__name__}: {exc}",
+                retry_in_seconds=round(backoff, 1),
+                **clip_body(getattr(exc, "body", None)),
             )
-            await asyncio.sleep(min(2**attempt, 30))
-
-    log_stage_error(
-        log,
-        "Gave up creating the webhook subscription after retries; events will "
-        "not arrive until this succeeds",
-        stage="subscription_setup",
-        callback_url=callback,
-        include_traceback=False,
-    )
+            await asyncio.sleep(backoff)
+            backoff = min(
+                backoff * 2, settings.subscription_check_interval_seconds
+            )
 
 
 # --------------------------------------------------------------------------- #

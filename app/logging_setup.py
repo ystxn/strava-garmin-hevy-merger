@@ -13,6 +13,7 @@ This module centralises that behaviour so the rest of the app just calls
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import traceback
 from typing import Any
@@ -30,6 +31,52 @@ _RESERVED = set(
 ) | {"message", "asctime", "taskName"}
 
 
+# Strava's GET/DELETE on push_subscriptions require client_secret as a query
+# param, and httpx logs full request URLs at INFO — so the secret would land in
+# the logs. Redact it (and other obvious credential params) defensively.
+_SECRET_PARAM_RE = re.compile(
+    r"(client_secret|access_token|refresh_token|code)=[^&\s\"']+"
+)
+
+
+class _RedactSecretsFilter(logging.Filter):
+    """Mask credential query params in any log message before it's emitted.
+
+    Renders the record's message (resolving %-args), substitutes the secret,
+    and pins the result back onto the record so every handler/formatter sees
+    the redacted text. Applied to the shared stdout handler so it covers our
+    own logs and third-party loggers (notably httpx) alike.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:  # pragma: no cover - never block logging on this
+            return True
+        if "=" in message and _SECRET_PARAM_RE.search(message):
+            record.msg = _SECRET_PARAM_RE.sub(r"\1=<redacted>", message)
+            record.args = ()
+        return True
+
+
+class _HealthAccessFilter(logging.Filter):
+    """Drop uvicorn access-log lines for ``/health`` probes.
+
+    Kubernetes liveness/readiness probes hit ``/health`` every few seconds; at
+    one access line each they bury the real events. uvicorn logs access records
+    with ``args = (client, method, path, http_version, status)``, so we match
+    on the path (query string stripped) and suppress just those.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3:
+            path = args[2]
+            if isinstance(path, str) and path.split("?", 1)[0] == "/health":
+                return False
+        return True
+
+
 def configure_logging(level: str = "INFO") -> None:
     """Install a single JSON-emitting stdout handler on the root logger."""
     handler = logging.StreamHandler(sys.stdout)
@@ -43,6 +90,9 @@ def configure_logging(level: str = "INFO") -> None:
         reserved_attrs=_RESERVED,
     )
     handler.setFormatter(formatter)
+    # Redact credentials from every record this handler emits (e.g. httpx's
+    # request-URL logs, which carry client_secret in the query string).
+    handler.addFilter(_RedactSecretsFilter())
 
     root = logging.getLogger()
     root.handlers.clear()
@@ -55,6 +105,14 @@ def configure_logging(level: str = "INFO") -> None:
         lg = logging.getLogger(name)
         lg.handlers.clear()
         lg.propagate = True
+
+    # Suppress the noisy /health probe access lines (re-runnable: drop any
+    # filter we added on a previous call before re-adding a fresh one).
+    access = logging.getLogger("uvicorn.access")
+    access.filters = [
+        f for f in access.filters if not isinstance(f, _HealthAccessFilter)
+    ]
+    access.addFilter(_HealthAccessFilter())
 
 
 def clip_body(body: Any) -> dict[str, Any]:
