@@ -326,6 +326,43 @@ async def test_non_strength_activity_ignored() -> None:
 
 
 @pytest.mark.usefixtures("merge_env")
+async def test_accepted_webhook_logs_full_raw_body(capsys) -> None:
+    # On the success path we log the complete incoming payload so any
+    # unexpected field/value/format is diagnosable from logs alone. The app
+    # logs JSON to stdout (configure_logging clears caplog's handler at
+    # startup), so we parse stdout like the logging tests do.
+    with respx.mock(assert_all_called=False) as router:
+        _register_common_routes(router)
+        async with LifespanManager(app):
+            ctx = app.state.ctx
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url=BASE_URL
+            ) as client:
+                await client.post("/webhook", json=_event(111))
+                await _drain(ctx)
+
+    records = [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if line.strip().startswith("{")
+    ]
+    ingest = [
+        r
+        for r in records
+        if r.get("stage") == "webhook_ingest"
+        and r.get("message") == "Webhook event received"
+    ]
+    assert ingest, "expected a webhook_ingest 'received' log line"
+    raw = json.loads(ingest[0]["raw_body"])
+    # The full event body is present, including fields we don't extract.
+    assert raw["object_id"] == 111
+    assert raw["subscription_id"] == 1
+    assert raw["event_time"] == 1735725600
+    assert "updates" in raw
+
+
+@pytest.mark.usefixtures("merge_env")
 async def test_malformed_webhook_acknowledged() -> None:
     with respx.mock(assert_all_called=False) as router:
         _register_common_routes(router)

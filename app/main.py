@@ -217,6 +217,10 @@ async def receive_webhook(request: Request) -> JSONResponse:
         activity_id=event.object_id,
         object_type=event.object_type,
         aspect_type=event.aspect_type,
+        # Log the full raw body on every accepted event so any field/format
+        # surprise is diagnosable from logs alone, even when parsing succeeded
+        # but a value was unexpected. Webhook payloads are tiny.
+        raw_body=raw.decode("utf-8", errors="replace"),
     )
 
     _schedule(ctx, process_event(ctx, event))
