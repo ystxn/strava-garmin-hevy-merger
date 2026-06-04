@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: strava-merger-config
+  namespace: default
+data:
+  # Must match the Ingress host below.
+  PUBLIC_BASE_URL: "https://strava-merger.example.com"
+  PENDING_TTL_SECONDS: "600"
+  MATCH_WINDOW_SECONDS: "300"
+  MERGED_ACTIVITY_VISIBILITY: "only_me"
+  DELETE_ORIGINALS: "true"
+  LOG_LEVEL: "INFO"
+  MANAGE_WEBHOOK_SUBSCRIPTION: "true"

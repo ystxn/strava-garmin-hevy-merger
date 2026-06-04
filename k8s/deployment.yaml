@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: strava-merger
+  namespace: default
+  labels:
+    app: strava-merger
+spec:
+  # MUST be 1: the pending buffer is in-memory and not shared across replicas.
+  # For HA, replace the in-memory dict with a Redis-backed store first.
+  replicas: 1
+  strategy:
+    # Avoid two pods briefly co-existing (would split the in-memory buffer).
+    type: Recreate
+  selector:
+    matchLabels:
+      app: strava-merger
+  template:
+    metadata:
+      labels:
+        app: strava-merger
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # If the GHCR package is private, create a pull secret and reference it:
+      #   kubectl create secret docker-registry ghcr-pull -n default \
+      #     --docker-server=ghcr.io --docker-username=<gh-user> \
+      #     --docker-password=<PAT with read:packages>
+      # imagePullSecrets:
+      #   - name: ghcr-pull
+      containers:
+        - name: strava-merger
+          # Published by .github/workflows/build-and-publish.yml. For a
+          # reproducible deploy, pin the sha-<commit> tag instead of latest.
+          image: ghcr.io/ystxn/strava-garmin-hevy-merger:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: strava-merger-secret
+            - configMapRef:
+                name: strava-merger-config
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi

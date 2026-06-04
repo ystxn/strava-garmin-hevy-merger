@@ -1,0 +1,342 @@
+"""End-to-end webhook + merge pipeline tests with Strava mocked via respx.
+
+The app's outbound HTTP (default AsyncHTTPTransport) is intercepted by respx;
+the test's calls into the app go through httpx.ASGITransport, which respx does
+not patch, so the two don't interfere.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+
+import httpx
+import pytest
+import respx
+from asgi_lifespan import LifespanManager
+
+from app.config import get_settings
+from app.main import app
+
+HOST = "www.strava.com"
+BASE_URL = "http://testserver"
+
+
+def _event(object_id: int, owner_id: int = 42) -> dict:
+    return {
+        "aspect_type": "create",
+        "object_type": "activity",
+        "object_id": object_id,
+        "owner_id": owner_id,
+        "subscription_id": 1,
+        "event_time": 1735725600,
+        "updates": {},
+    }
+
+
+def _register_common_routes(router: respx.MockRouter) -> dict:
+    """Register OAuth + activity/stream fetches; return the mutable route map."""
+    router.route(method="POST", host=HOST, path="/oauth/token").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "access_token": "access-123",
+                "refresh_token": "test-refresh-token",
+                "expires_at": 9999999999,
+                "expires_in": 21600,
+                "token_type": "Bearer",
+            },
+        )
+    )
+
+    garmin = {
+        "id": 111,
+        "external_id": "garmin_push_99.fit",
+        "device_name": "Garmin Forerunner 965",
+        "type": "WeightTraining",
+        "sport_type": "WeightTraining",
+        "start_date": "2026-01-01T10:00:00Z",
+        "elapsed_time": 3600,
+        "has_heartrate": True,
+        "athlete": {"id": 42},
+        "sets": [],
+    }
+    hevy = {
+        "id": 222,
+        "external_id": "hevy-abc",
+        "type": "WeightTraining",
+        "sport_type": "WeightTraining",
+        "start_date": "2026-01-01T10:00:20Z",
+        "elapsed_time": 3500,
+        "has_heartrate": False,
+        "athlete": {"id": 42},
+        "sets": [
+            {"exercise": {"name": "Bench Press"}, "reps": 5, "weight": 80.0,
+             "weight_units": "kilograms"},
+            {"exercise": {"name": "Back Squat"}, "reps": 5, "weight": 100.0},
+        ],
+    }
+
+    router.route(method="GET", host=HOST, path="/api/v3/activities/111").mock(
+        return_value=httpx.Response(200, json=garmin)
+    )
+    router.route(method="GET", host=HOST, path="/api/v3/activities/222").mock(
+        return_value=httpx.Response(200, json=hevy)
+    )
+    router.route(
+        method="GET", host=HOST, path="/api/v3/activities/111/streams"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "heartrate": {"data": [70, 72, 74, 76, 78], "series_type": "time"},
+                "time": {"data": [0, 60, 120, 180, 240], "series_type": "time"},
+            },
+        )
+    )
+    return {}
+
+
+async def _drain(ctx, max_iters: int = 500) -> None:
+    """Await all per-event background tasks (and any they transitively await)."""
+    for _ in range(max_iters):
+        await asyncio.sleep(0)
+        tasks = [t for t in list(ctx.background_tasks) if not t.done()]
+        if not tasks:
+            return
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.fixture
+def merge_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MANAGE_WEBHOOK_SUBSCRIPTION", "false")
+    monkeypatch.setenv("UPLOAD_POLL_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("UPLOAD_POLL_MAX_ATTEMPTS", "3")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+# --- simple endpoints ------------------------------------------------------
+
+
+@pytest.mark.usefixtures("merge_env")
+async def test_health() -> None:
+    with respx.mock(assert_all_called=False) as router:
+        _register_common_routes(router)
+        async with LifespanManager(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url=BASE_URL
+            ) as client:
+                resp = await client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+
+
+@pytest.mark.usefixtures("merge_env")
+async def test_webhook_validation_ok() -> None:
+    with respx.mock(assert_all_called=False) as router:
+        _register_common_routes(router)
+        async with LifespanManager(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url=BASE_URL
+            ) as client:
+                resp = await client.get(
+                    "/webhook",
+                    params={
+                        "hub.mode": "subscribe",
+                        "hub.verify_token": "test-verify-token",
+                        "hub.challenge": "challenge-xyz",
+                    },
+                )
+    assert resp.status_code == 200
+    assert resp.json() == {"hub.challenge": "challenge-xyz"}
+
+
+@pytest.mark.usefixtures("merge_env")
+async def test_webhook_validation_bad_token() -> None:
+    with respx.mock(assert_all_called=False) as router:
+        _register_common_routes(router)
+        async with LifespanManager(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url=BASE_URL
+            ) as client:
+                resp = await client.get(
+                    "/webhook",
+                    params={
+                        "hub.mode": "subscribe",
+                        "hub.verify_token": "wrong",
+                        "hub.challenge": "challenge-xyz",
+                    },
+                )
+    assert resp.status_code == 403
+
+
+# --- full merge flow -------------------------------------------------------
+
+
+@pytest.mark.usefixtures("merge_env")
+async def test_full_merge_flow_deletes_originals() -> None:
+    with respx.mock(assert_all_called=False) as router:
+        _register_common_routes(router)
+        upload_route = router.route(
+            method="POST", host=HOST, path="/api/v3/uploads"
+        ).mock(
+            return_value=httpx.Response(
+                201,
+                json={
+                    "id": 999,
+                    "id_str": "999",
+                    "external_id": None,
+                    "error": None,
+                    "status": "Your activity is ready.",
+                    "activity_id": 555,
+                },
+            )
+        )
+        del_garmin = router.route(
+            method="DELETE", host=HOST, path="/api/v3/activities/111"
+        ).mock(return_value=httpx.Response(204))
+        del_hevy = router.route(
+            method="DELETE", host=HOST, path="/api/v3/activities/222"
+        ).mock(return_value=httpx.Response(204))
+
+        async with LifespanManager(app):
+            ctx = app.state.ctx
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url=BASE_URL
+            ) as client:
+                r1 = await client.post("/webhook", json=_event(111))
+                r2 = await client.post("/webhook", json=_event(222))
+                assert r1.status_code == 200
+                assert r2.status_code == 200
+                await _drain(ctx)
+
+        # The merged activity was uploaded exactly once.
+        assert upload_route.call_count == 1
+        payload = json.loads(upload_route.calls[0].request.content)
+        assert payload["sport_type"] == "WeightTraining"
+        assert payload["visibility"] == "only_me"
+        assert payload["start_time"] == "2026-01-01T10:00:00Z"  # from Garmin
+        assert payload["elapsed_time"] == 3600
+        assert len(payload["sets"]) == 2
+        assert payload["sets"][0]["exercise"]["name"] == "Bench Press"
+        assert payload["streams"]["heartrate"]["data"] == [70, 72, 74, 76, 78]
+        assert payload["streams"]["time"]["data"] == [0, 60, 120, 180, 240]
+
+        # Both originals were deleted; the merged id is remembered.
+        assert del_garmin.called
+        assert del_hevy.called
+        assert 555 in ctx.processed_activity_ids
+        assert {111, 222} <= ctx.processed_activity_ids
+        assert ctx.matcher.pending_count() == 0
+
+
+@pytest.mark.usefixtures("merge_env")
+async def test_merge_keeps_originals_when_delete_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DELETE_ORIGINALS", "false")
+    get_settings.cache_clear()
+
+    with respx.mock(assert_all_called=False) as router:
+        _register_common_routes(router)
+        router.route(method="POST", host=HOST, path="/api/v3/uploads").mock(
+            return_value=httpx.Response(
+                201, json={"id": 999, "error": None, "activity_id": 555}
+            )
+        )
+        del_garmin = router.route(
+            method="DELETE", host=HOST, path="/api/v3/activities/111"
+        ).mock(return_value=httpx.Response(204))
+        del_hevy = router.route(
+            method="DELETE", host=HOST, path="/api/v3/activities/222"
+        ).mock(return_value=httpx.Response(204))
+
+        async with LifespanManager(app):
+            ctx = app.state.ctx
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url=BASE_URL
+            ) as client:
+                await client.post("/webhook", json=_event(111))
+                await client.post("/webhook", json=_event(222))
+                await _drain(ctx)
+
+        assert not del_garmin.called
+        assert not del_hevy.called
+        assert 555 in ctx.processed_activity_ids
+
+
+@pytest.mark.usefixtures("merge_env")
+async def test_single_activity_waits_for_partner() -> None:
+    with respx.mock(assert_all_called=False) as router:
+        _register_common_routes(router)
+        upload_route = router.route(
+            method="POST", host=HOST, path="/api/v3/uploads"
+        ).mock(return_value=httpx.Response(201, json={"id": 1, "activity_id": 2}))
+
+        async with LifespanManager(app):
+            ctx = app.state.ctx
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url=BASE_URL
+            ) as client:
+                await client.post("/webhook", json=_event(111))
+                await _drain(ctx)
+
+        # Only the Garmin half arrived: nothing uploaded, it stays buffered.
+        assert upload_route.call_count == 0
+        assert ctx.matcher.pending_count() == 1
+
+
+@pytest.mark.usefixtures("merge_env")
+async def test_non_strength_activity_ignored() -> None:
+    with respx.mock(assert_all_called=False) as router:
+        _register_common_routes(router)
+        # Activity 111 re-mocked as a Run.
+        router.route(method="GET", host=HOST, path="/api/v3/activities/111").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": 111,
+                    "type": "Run",
+                    "sport_type": "Run",
+                    "start_date": "2026-01-01T10:00:00Z",
+                    "elapsed_time": 1800,
+                    "has_heartrate": True,
+                    "athlete": {"id": 42},
+                    "sets": [],
+                },
+            )
+        )
+        async with LifespanManager(app):
+            ctx = app.state.ctx
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url=BASE_URL
+            ) as client:
+                await client.post("/webhook", json=_event(111))
+                await _drain(ctx)
+        assert ctx.matcher.pending_count() == 0
+
+
+@pytest.mark.usefixtures("merge_env")
+async def test_malformed_webhook_acknowledged() -> None:
+    with respx.mock(assert_all_called=False) as router:
+        _register_common_routes(router)
+        async with LifespanManager(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url=BASE_URL
+            ) as client:
+                resp = await client.post(
+                    "/webhook", content=b"{not json", headers={"content-type": "application/json"}
+                )
+    # We acknowledge malformed payloads (200) so Strava doesn't retry forever.
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ignored"}

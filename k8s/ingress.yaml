@@ -1,0 +1,26 @@
+# Assumes an existing ingress controller and cert-manager on the cluster.
+# Replace strava-merger.example.com with your host (and match PUBLIC_BASE_URL
+# in the ConfigMap).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: strava-merger
+  namespace: default
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  rules:
+    - host: strava-merger.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: strava-merger
+                port:
+                  number: 80
+  tls:
+    - hosts:
+        - strava-merger.example.com
+      secretName: strava-merger-tls
