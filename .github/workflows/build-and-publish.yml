@@ -48,6 +48,9 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: main
+          # No tags exist yet on a fresh repo; start from 0.0.0 so the first
+          # run bumps to 0.0.1 instead of erroring on "no latest tag".
+          fallbackTag: 0.0.0
           # Conventional-commit messages drive the bump; with none, bump patch.
           noVersionBumpBehavior: patch
           # Re-run with no new commits: keep the current version.
