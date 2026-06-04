@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     # Whether to verify/create the Strava push subscription on startup. Disable
     # for local development where PUBLIC_BASE_URL is not reachable by Strava.
     manage_webhook_subscription: bool = True
+    # Steady-state cadence for re-verifying the push subscription exists, and
+    # the floor for the exponential backoff used while it can't be created. A
+    # fresh deploy can 400 for a minute or two while the ingress/TLS cert comes
+    # up (Strava validates the callback synchronously), so we never give up.
+    subscription_check_interval_seconds: int = 300
+    subscription_retry_min_seconds: float = 5.0
     # Strava sport_type values treated as "strength" activities.
     strength_sport_types: tuple[str, ...] = ("WeightTraining",)
     # Preferred weight unit emitted in the merged payload.
@@ -102,6 +108,8 @@ class Settings(BaseSettings):
             "upload_poll_max_attempts": self.upload_poll_max_attempts,
             "token_refresh_buffer_seconds": self.token_refresh_buffer_seconds,
             "manage_webhook_subscription": self.manage_webhook_subscription,
+            "subscription_check_interval_seconds": self.subscription_check_interval_seconds,
+            "subscription_retry_min_seconds": self.subscription_retry_min_seconds,
             "strength_sport_types": list(self.strength_sport_types),
             "weight_units": self.weight_units,
         }
