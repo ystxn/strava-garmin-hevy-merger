@@ -10,7 +10,8 @@ from __future__ import annotations
 from typing import Any
 
 from .config import Settings
-from .models import StravaActivity, StravaSet
+from .hevy import parse_hevy_sets
+from .models import StravaActivity
 
 # Required keys the Strava JSON upload must carry (used to validate the built
 # payload before we attempt the upload).
@@ -59,30 +60,36 @@ def identify_pair(
 ) -> tuple[StravaActivity, StravaActivity] | None:
     """Resolve which activity is Garmin (HR) and which is Hevy (sets).
 
-    Per the spec: the one with a non-empty ``sets`` array is Hevy; the one with
-    a heart-rate stream is Garmin. We return the assignment that satisfies both
-    conditions, or ``None`` when neither assignment does — that ``None`` is the
-    "graceful no-op" case (e.g. no sets anywhere, or the sets-haver's partner
-    has no HR), where the caller must leave both activities intact.
+    The reliable signal is the source tag (``external_id`` / ``device_name``)
+    via :func:`identify_source`: Strava does not return a structured ``sets``
+    array, so the older "has_sets vs has_heartrate" content check can never
+    succeed on real data. We first look for an assignment where one side is
+    clearly Garmin and the other clearly Hevy; failing that we fall back to the
+    content signals (Hevy=sets, Garmin=HR) for synthetic / edge cases.
 
-    Returns ``(garmin, hevy)``.
+    Returns ``(garmin, hevy)``, or ``None`` when no assignment is conclusive —
+    the "graceful no-op" case where the caller leaves both activities intact.
     """
+    for garmin, hevy in ((a, b), (b, a)):
+        if garmin.id == hevy.id:
+            continue
+        if identify_source(garmin) == "garmin" and identify_source(hevy) == "hevy":
+            return garmin, hevy
+    # Fallback: content signals, for cases where source tags are inconclusive.
     for garmin, hevy in ((a, b), (b, a)):
         if garmin.id != hevy.id and hevy.has_sets and garmin.has_heartrate:
             return garmin, hevy
     return None
 
 
-def _extract_set(raw_set: StravaSet, index: int, default_units: str) -> dict[str, Any]:
-    """Map one Strava/Hevy set onto the merged-upload set shape, defensively.
+def _extract_set(d: dict[str, Any], index: int, default_units: str) -> dict[str, Any]:
+    """Map one set dict onto the merged-upload set shape, defensively.
 
-    The exact field names Strava returns for strength sets are undocumented, so
-    we read several plausible spellings and fall back gracefully. Unknown extra
-    keys were preserved by the model (``extra="allow"``) and are reachable via
-    ``model_dump()``.
+    Accepts either a structured set from Strava (``StravaSet.model_dump()``) or
+    a set parsed out of the Hevy description (:func:`app.hevy.parse_hevy_sets`).
+    The exact field names are undocumented, so we read several plausible
+    spellings and fall back gracefully.
     """
-    d = raw_set.model_dump()
-
     exercise = d.get("exercise")
     name: str | None = None
     if isinstance(exercise, dict):
@@ -140,8 +147,11 @@ def build_merged_payload(
     in a ``payload_build`` diagnostic. Use :func:`required_payload_problems` to
     check completeness before uploading.
     """
+    # Prefer a structured `sets` array if Strava ever provides one; otherwise
+    # recover the sets from Hevy's free-text description (the real-world case).
+    raw_sets = [s.model_dump() for s in hevy.sets] or parse_hevy_sets(hevy.description)
     mapped_sets = [
-        _extract_set(s, i, settings.weight_units) for i, s in enumerate(hevy.sets)
+        _extract_set(d, i, settings.weight_units) for i, d in enumerate(raw_sets)
     ]
 
     payload: dict[str, Any] = {

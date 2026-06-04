@@ -81,6 +81,29 @@ def test_identify_pair_none_when_partner_has_no_hr() -> None:
     assert identify_pair(h, other) is None
 
 
+def test_identify_pair_matches_real_strava_pair_without_sets_array() -> None:
+    # Mirrors the production log: neither activity carries a structured `sets`
+    # array (Strava doesn't return one). Hevy is identified by external_id /
+    # device_name, Garmin by external_id / device_name + heart rate.
+    hevy = make_activity(
+        id=18780591589,
+        external_id="hevy_upload_1780563473040.json",
+        device_name="Hevy",
+        has_heartrate=False,
+        sets=[],
+        description="Logged with hevyapp.com\n\nDeadlift (Barbell)\nSet 1: 55 kg x 6",
+    )
+    garmin = make_activity(
+        id=18780601778,
+        external_id="garmin_ping_580340013153",
+        device_name="Garmin Forerunner 970",
+        has_heartrate=True,
+        sets=[],
+    )
+    assert identify_pair(hevy, garmin) == (garmin, hevy)
+    assert identify_pair(garmin, hevy) == (garmin, hevy)
+
+
 # --- build_merged_payload --------------------------------------------------
 
 
@@ -126,6 +149,31 @@ def test_build_merged_payload_missing_name_defaults(settings: Settings) -> None:
     g = garmin_activity()
     payload = build_merged_payload(g, h, [60], [0], settings)
     assert payload["sets"][0]["exercise"]["name"] == "Unknown Exercise"
+
+
+def test_build_merged_payload_parses_sets_from_description(
+    settings: Settings,
+) -> None:
+    # No structured `sets` array (the real-world case) -> parse the Hevy
+    # description so the merged upload still carries the sets.
+    h = make_activity(
+        id=222,
+        sets=[],
+        description=(
+            "Logged with hevyapp.com\n\nDeadlift (Barbell)\n"
+            "Set 1: 55 kg x 6\nSet 2: 60 kg x 6\n"
+        ),
+    )
+    g = garmin_activity()
+    payload = build_merged_payload(g, h, [70, 72], [0, 1], settings)
+
+    assert len(payload["sets"]) == 2
+    assert payload["sets"][0]["exercise"]["name"] == "Deadlift (Barbell)"
+    assert payload["sets"][0]["weight"] == 55.0
+    assert payload["sets"][0]["reps"] == 6
+    assert payload["sets"][0]["weight_units"] == "kilograms"
+    assert payload["sets"][1]["weight"] == 60.0
+    assert required_payload_problems(payload) == []
 
 
 # --- required_payload_problems ---------------------------------------------
