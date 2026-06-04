@@ -28,6 +28,7 @@ from .auth import TokenManager
 from .logging_setup import (
     clip_body,
     configure_logging,
+    log_raw_response,
     log_stage_error,
     log_stage_event,
     log_unexpected_fields,
@@ -322,6 +323,19 @@ async def process_event(ctx: AppContext, event: WebhookEvent) -> None:
         return
 
     activity = fetched.activity
+
+    # Diagnostic: capture the complete raw activity-detail body so the real
+    # Strava schema (notably where strength sets actually live) is analysable
+    # from logs alone. clip_body only truncates above 50 KB.
+    log_raw_response(
+        log,
+        "Fetched activity detail (raw)",
+        context="activity_detail",
+        raw=fetched.raw,
+        activity_id=activity_id,
+        athlete_id=athlete_id,
+    )
+
     if activity.model_extra:
         log_unexpected_fields(
             log,
