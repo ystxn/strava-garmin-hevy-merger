@@ -10,11 +10,20 @@ from __future__ import annotations
 from typing import Any
 
 from .config import Settings
-from .models import StravaActivity, StravaSet
+from .exercises import to_exercise_type
+from .hevy import parse_hevy_sets
+from .models import StravaActivity
 
-# Required keys the Strava JSON upload must carry (used to validate the built
-# payload before we attempt the upload).
-REQUIRED_PAYLOAD_FIELDS = ("sport_type", "start_time", "elapsed_time")
+# Required top-level keys the Strava JSON strength upload must carry (used to
+# validate the built payload before we attempt the upload).
+REQUIRED_PAYLOAD_FIELDS = ("version", "start_time", "elapsed_time")
+
+# Pounds -> kilograms (Strava's JSON upload expresses weight in kg).
+_LB_TO_KG = 0.45359237
+
+# The sport_type used for merged strength uploads (a multipart form field, not
+# a body field).
+MERGED_SPORT_TYPE = "WeightTraining"
 
 
 def identify_source(activity: StravaActivity) -> str | None:
@@ -59,69 +68,107 @@ def identify_pair(
 ) -> tuple[StravaActivity, StravaActivity] | None:
     """Resolve which activity is Garmin (HR) and which is Hevy (sets).
 
-    Per the spec: the one with a non-empty ``sets`` array is Hevy; the one with
-    a heart-rate stream is Garmin. We return the assignment that satisfies both
-    conditions, or ``None`` when neither assignment does — that ``None`` is the
-    "graceful no-op" case (e.g. no sets anywhere, or the sets-haver's partner
-    has no HR), where the caller must leave both activities intact.
+    The reliable signal is the source tag (``external_id`` / ``device_name``)
+    via :func:`identify_source`: Strava does not return a structured ``sets``
+    array, so the older "has_sets vs has_heartrate" content check can never
+    succeed on real data. We first look for an assignment where one side is
+    clearly Garmin and the other clearly Hevy; failing that we fall back to the
+    content signals (Hevy=sets, Garmin=HR) for synthetic / edge cases.
 
-    Returns ``(garmin, hevy)``.
+    Returns ``(garmin, hevy)``, or ``None`` when no assignment is conclusive —
+    the "graceful no-op" case where the caller leaves both activities intact.
     """
+    for garmin, hevy in ((a, b), (b, a)):
+        if garmin.id == hevy.id:
+            continue
+        if identify_source(garmin) == "garmin" and identify_source(hevy) == "hevy":
+            return garmin, hevy
+    # Fallback: content signals, for cases where source tags are inconclusive.
     for garmin, hevy in ((a, b), (b, a)):
         if garmin.id != hevy.id and hevy.has_sets and garmin.has_heartrate:
             return garmin, hevy
     return None
 
 
-def _extract_set(raw_set: StravaSet, index: int, default_units: str) -> dict[str, Any]:
-    """Map one Strava/Hevy set onto the merged-upload set shape, defensively.
+def hevy_set_dicts(hevy: StravaActivity) -> list[dict[str, Any]]:
+    """Return the raw Hevy set dicts: a structured array if present, else the
+    sets parsed out of the free-text description (the real-world case)."""
+    return [s.model_dump() for s in hevy.sets] or parse_hevy_sets(hevy.description)
 
-    The exact field names Strava returns for strength sets are undocumented, so
-    we read several plausible spellings and fall back gracefully. Unknown extra
-    keys were preserved by the model (``extra="allow"``) and are reachable via
-    ``model_dump()``.
-    """
-    d = raw_set.model_dump()
 
+def _set_name(d: dict[str, Any]) -> str:
+    """Read an exercise name from a set dict, across plausible spellings."""
     exercise = d.get("exercise")
     name: str | None = None
     if isinstance(exercise, dict):
         name = exercise.get("name") or exercise.get("title")
-    name = name or d.get("exercise_name") or d.get("name")
+    return name or d.get("exercise_name") or d.get("name") or ""
+
+
+def _to_kg(weight: float | int | None, units: str | None) -> float | None:
+    """Convert a weight to kilograms (Strava's upload unit)."""
+    if weight is None:
+        return None
+    if units and units.strip().lower().startswith(("lb", "pound")):
+        return round(float(weight) * _LB_TO_KG, 2)
+    return float(weight)
+
+
+def _to_strava_set(d: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    """Map one set dict onto Strava's JSON strength ``set`` shape.
+
+    ``exercise_type`` is required; ``repetitions``/``weight``/``duration`` are
+    only included when present. Weight is normalised to kilograms.
+    """
+    exercise_type, _matched = to_exercise_type(
+        _set_name(d), fallback=settings.fallback_exercise_type
+    )
+    out: dict[str, Any] = {"exercise_type": exercise_type}
 
     reps = d.get("reps")
     if reps is None:
         reps = d.get("repetitions")
+    if reps is not None:
+        out["repetitions"] = reps
 
     weight = d.get("weight")
     if weight is None:
         weight = d.get("weight_kg")
+    weight_kg = _to_kg(weight, d.get("weight_units"))
+    if weight_kg is not None:
+        out["weight"] = weight_kg
 
-    out: dict[str, Any] = {
-        "id": d.get("id") if d.get("id") is not None else index,
-        "exercise": {"name": name or "Unknown Exercise"},
-        "reps": reps,
-        "weight": weight,
-        "weight_units": d.get("weight_units") or default_units,
-    }
-
-    # start_index / end_index are optional positions in the time stream.
-    if d.get("start_index") is not None:
-        out["start_index"] = d["start_index"]
-    if d.get("end_index") is not None:
-        out["end_index"] = d["end_index"]
+    if d.get("duration") is not None:
+        out["duration"] = d["duration"]
     return out
 
 
-def _build_description(hevy: StravaActivity, mapped_sets: list[dict[str, Any]]) -> str:
-    exercises = []
-    for s in mapped_sets:
-        ex = s.get("exercise", {}).get("name")
-        if ex and ex not in exercises:
-            exercises.append(ex)
-    parts = [f"{len(mapped_sets)} sets"]
-    if exercises:
-        parts.append(f"{len(exercises)} exercises")
+def unmapped_exercise_names(hevy: StravaActivity, settings: Settings) -> list[str]:
+    """Distinct Hevy exercise names that fell through to the fallback enum.
+
+    The orchestrator logs these so unmapped exercises are visible (and the
+    curated map / config can be extended).
+    """
+    names: list[str] = []
+    for d in hevy_set_dicts(hevy):
+        name = _set_name(d)
+        _etype, matched = to_exercise_type(
+            name, fallback=settings.fallback_exercise_type
+        )
+        if not matched and name and name not in names:
+            names.append(name)
+    return names
+
+
+def _build_description(sets: list[dict[str, Any]]) -> str:
+    exercise_types = []
+    for s in sets:
+        et = s.get("exercise_type")
+        if et and et not in exercise_types:
+            exercise_types.append(et)
+    parts = [f"{len(sets)} sets"]
+    if exercise_types:
+        parts.append(f"{len(exercise_types)} exercises")
     parts.append("HR from Garmin, sets from Hevy")
     return " · ".join(parts)
 
@@ -133,28 +180,26 @@ def build_merged_payload(
     time_data: list[Any],
     settings: Settings,
 ) -> dict[str, Any]:
-    """Construct the merged JSON upload payload (best effort, never raises).
+    """Construct the Strava JSON strength upload body (best effort, never raises).
 
-    Returns a dict even when source fields are missing (values may be ``None``)
-    so the caller can both validate it and log the partially-constructed payload
-    in a ``payload_build`` diagnostic. Use :func:`required_payload_problems` to
-    check completeness before uploading.
+    Returns the JSON dict that becomes the uploaded ``file`` (``sport_type`` is
+    a separate multipart field, see :data:`MERGED_SPORT_TYPE`). Use
+    :func:`required_payload_problems` to validate before uploading.
     """
-    mapped_sets = [
-        _extract_set(s, i, settings.weight_units) for i, s in enumerate(hevy.sets)
-    ]
+    sets = [_to_strava_set(d, settings) for d in hevy_set_dicts(hevy)]
 
     payload: dict[str, Any] = {
-        "sport_type": "WeightTraining",
+        "version": "1.0",
         "start_time": garmin.start_date,
+        "utc_offset": int(garmin.utc_offset) if garmin.utc_offset is not None else None,
         "elapsed_time": garmin.elapsed_time,
-        "description": _build_description(hevy, mapped_sets),
-        "visibility": settings.merged_activity_visibility,
-        "sets": mapped_sets,
+        "active_time": garmin.moving_time,
+        "description": _build_description(sets),
         "streams": {
-            "time": {"data": time_data},
-            "heartrate": {"data": heartrate_data},
+            "time": time_data,
+            "heartrate": heartrate_data,
         },
+        "sets": sets,
     }
     return payload
 
@@ -165,9 +210,11 @@ def required_payload_problems(payload: dict[str, Any]) -> list[str]:
     for key in REQUIRED_PAYLOAD_FIELDS:
         if payload.get(key) in (None, ""):
             problems.append(f"missing {key}")
-    if not payload.get("sets"):
+    sets = payload.get("sets") or []
+    if not sets:
         problems.append("no sets in payload")
-    hr = payload.get("streams", {}).get("heartrate", {}).get("data")
-    if not hr:
+    elif any(not s.get("exercise_type") for s in sets):
+        problems.append("set missing exercise_type")
+    if not payload.get("streams", {}).get("heartrate"):
         problems.append("empty heartrate stream")
     return problems

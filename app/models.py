@@ -15,6 +15,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .hevy import parse_hevy_sets
+
 # --------------------------------------------------------------------------- #
 # Webhook events
 # --------------------------------------------------------------------------- #
@@ -85,7 +87,9 @@ class StravaActivity(BaseModel):
     start_date_local: Optional[str] = None
     elapsed_time: Optional[int] = None
     moving_time: Optional[int] = None
+    utc_offset: Optional[float] = None
     device_name: Optional[str] = None
+    description: Optional[str] = None
     has_heartrate: bool = False
     average_heartrate: Optional[float] = None
     max_heartrate: Optional[float] = None
@@ -98,7 +102,9 @@ class StravaActivity(BaseModel):
 
     @property
     def has_sets(self) -> bool:
-        return bool(self.sets)
+        # Strava returns no structured `sets` array for strength workouts; Hevy
+        # writes the sets into the free-text description, so fall back to that.
+        return bool(self.sets) or bool(parse_hevy_sets(self.description))
 
     def start_datetime(self) -> datetime | None:
         """Parse ``start_date`` (UTC ISO-8601, e.g. '2026-01-01T10:00:00Z')."""
