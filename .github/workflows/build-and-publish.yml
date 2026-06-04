@@ -33,10 +33,25 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write  # push the git tag
       packages: write
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Full history + tags so the semver action can find the previous
+          # release and compute the next bump from the commits since it.
+          fetch-depth: 0
+
+      - name: Compute next semver tag
+        id: tag
+        uses: ietf-tools/semver-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: main
+          # Conventional-commit messages drive the bump; with none, bump patch.
+          noVersionBumpBehavior: patch
+          # Re-run with no new commits: keep the current version.
+          noNewCommitBehavior: current
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
@@ -55,6 +70,7 @@ jobs:
           # metadata-action lowercases the image name for GHCR automatically.
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
+            type=raw,value=${{ steps.tag.outputs.nextStrict }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=long
 
@@ -67,3 +83,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Create and push git tag
+        run: |
+          git tag "${{ steps.tag.outputs.nextStrict }}"
+          git push origin "${{ steps.tag.outputs.nextStrict }}"
