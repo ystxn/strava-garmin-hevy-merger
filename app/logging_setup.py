@@ -17,7 +17,7 @@ import sys
 import traceback
 from typing import Any
 
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 
 # Bodies larger than this are clipped in logs; we keep the leading slice and
 # annotate the original size so nothing silently disappears.
@@ -33,7 +33,7 @@ _RESERVED = set(
 def configure_logging(level: str = "INFO") -> None:
     """Install a single JSON-emitting stdout handler on the root logger."""
     handler = logging.StreamHandler(sys.stdout)
-    formatter = jsonlogger.JsonFormatter(
+    formatter = JsonFormatter(
         "%(levelname)s %(name)s %(message)s",
         rename_fields={"levelname": "level"},
         # Emit an ISO-8601 "timestamp" field for every record.
