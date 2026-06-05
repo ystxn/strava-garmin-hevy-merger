@@ -47,7 +47,13 @@ async def test_create_upload_sends_multipart_json_file() -> None:
             ],
         }
         try:
-            result = await strava.create_upload(payload, sport_type="WeightTraining")
+            result = await strava.create_upload(
+                payload,
+                sport_type="WeightTraining",
+                external_id="merged-111-222-1780000000",
+                name="Strength B",
+                description="Logged with hevyapp.com\nDeadlift",
+            )
         finally:
             await http.aclose()
 
@@ -61,3 +67,7 @@ async def test_create_upload_sends_multipart_json_file() -> None:
     assert 'name="sport_type"' in body and "WeightTraining" in body
     assert 'name="file"' in body
     assert '"exercise_type": "BARBELL_DEADLIFT"' in body
+    # external_id (unique), name (title) and description ride as form fields.
+    assert 'name="external_id"' in body and "merged-111-222-1780000000" in body
+    assert 'name="name"' in body and "Strength B" in body
+    assert 'name="description"' in body and "hevyapp.com" in body

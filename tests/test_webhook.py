@@ -64,6 +64,8 @@ def _register_common_routes(router: respx.MockRouter) -> dict:
     hevy = {
         "id": 222,
         "external_id": "hevy-abc",
+        "name": "Strength B",
+        "description": "Logged with hevyapp.com\n\nBench Press\nSet 1: 80 kg x 5",
         "type": "WeightTraining",
         "sport_type": "WeightTraining",
         "start_date": "2026-01-01T10:00:20Z",
@@ -97,15 +99,29 @@ def _register_common_routes(router: respx.MockRouter) -> dict:
     return {}
 
 
+def _multipart_parts(request: httpx.Request) -> dict[str, bytes]:
+    """Map each multipart field name -> its raw body bytes."""
+    boundary = request.headers["content-type"].split("boundary=")[1].encode()
+    out: dict[str, bytes] = {}
+    for part in request.content.split(b"--" + boundary):
+        marker = b'name="'
+        i = part.find(marker)
+        if i == -1:
+            continue
+        j = part.find(b'"', i + len(marker))
+        field = part[i + len(marker) : j].decode()
+        blank = part.find(b"\r\n\r\n")
+        if blank != -1:
+            out[field] = part[blank + 4 :].rstrip(b"\r\n-")
+    return out
+
+
 def _uploaded_json(request: httpx.Request) -> dict:
     """Extract the JSON `file` part from a multipart /uploads request body."""
-    ctype = request.headers["content-type"]
-    boundary = ctype.split("boundary=")[1].encode()
-    for part in request.content.split(b"--" + boundary):
-        if b'name="file"' in part:
-            blank = part.find(b"\r\n\r\n")
-            return json.loads(part[blank + 4 :].rstrip(b"\r\n-"))
-    raise AssertionError("no file part in multipart upload")
+    parts = _multipart_parts(request)
+    if "file" not in parts:
+        raise AssertionError("no file part in multipart upload")
+    return json.loads(parts["file"])
 
 
 async def _drain(ctx, max_iters: int = 500) -> None:
@@ -123,6 +139,9 @@ def merge_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MANAGE_WEBHOOK_SUBSCRIPTION", "false")
     monkeypatch.setenv("UPLOAD_POLL_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("UPLOAD_POLL_MAX_ATTEMPTS", "3")
+    # Force the admin endpoint off by default so tests don't depend on whether a
+    # local .env happens to define ADMIN_TOKEN (env var overrides the .env file).
+    monkeypatch.setenv("ADMIN_TOKEN", "")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -229,14 +248,22 @@ async def test_full_merge_flow_deletes_originals() -> None:
 
         # The merged activity was uploaded exactly once.
         assert upload_route.call_count == 1
-        payload = _uploaded_json(upload_route.calls[0].request)
+        request = upload_route.calls[0].request
+        payload = _uploaded_json(request)
         assert payload["version"] == "1.0"
-        assert payload["start_time"] == "2026-01-01T10:00:00Z"  # from Garmin
-        assert payload["elapsed_time"] == 3600
+        # Midpoint of Garmin 10:00:00 and Hevy 10:00:20 (dedup avoidance).
+        assert payload["start_time"] == "2026-01-01T10:00:10Z"
+        # avg(end) 10:59:20 - midpoint start 10:00:10 = 3550s.
+        assert payload["elapsed_time"] == 3550
         assert len(payload["sets"]) == 2
         assert payload["sets"][0]["exercise_type"] == "BENCH_PRESS_GENERIC"
         assert payload["streams"]["heartrate"] == [70, 72, 74, 76, 78]
         assert payload["streams"]["time"] == [0, 60, 120, 180, 240]
+        # Upload form fields: unique external_id, Hevy's title + description.
+        fields = _multipart_parts(request)
+        assert fields["external_id"].decode().startswith("merged-111-222-")
+        assert fields["name"].decode() == "Strength B"
+        assert b"hevyapp.com" in fields["description"]
 
         # Both originals were deleted; the merged id is remembered.
         assert del_garmin.called

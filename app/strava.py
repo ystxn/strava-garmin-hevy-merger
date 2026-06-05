@@ -204,17 +204,35 @@ class StravaClient:
     # -- uploads -----------------------------------------------------------
 
     async def create_upload(
-        self, payload: dict[str, Any], *, sport_type: str
+        self,
+        payload: dict[str, Any],
+        *,
+        sport_type: str,
+        external_id: str,
+        name: str | None = None,
+        description: str | None = None,
     ) -> UploadResult:
         # Strava's structured strength format is a multipart file upload: the
         # JSON payload is sent as a `file` with data_type=json, not a JSON body.
+        # name/description/external_id are documented /uploads form fields;
+        # external_id is the upload idempotency key (a unique value forces a
+        # fresh upload rather than replaying a prior one keyed on the filename).
         url = f"{API_BASE}/uploads"
         file_bytes = json.dumps(payload).encode("utf-8")
+        data: dict[str, Any] = {
+            "data_type": "json",
+            "sport_type": sport_type,
+            "external_id": external_id,
+        }
+        if name:
+            data["name"] = name
+        if description:
+            data["description"] = description
         resp = await self._request(
             "POST",
             url,
             files={"file": ("merged.json", file_bytes, "application/json")},
-            data={"data_type": "json", "sport_type": sport_type},
+            data=data,
         )
         if resp.status_code not in (200, 201):
             raise StravaApiError(

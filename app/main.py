@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import traceback
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -717,8 +718,19 @@ async def run_merge(
 
     # --- Stage: upload ---------------------------------------------------
     sport_type = garmin.sport_type or MERGED_SPORT_TYPE
+    # Unique external_id so Strava treats each attempt as a fresh upload (it
+    # otherwise keys idempotency on the filename and replays a prior result).
+    external_id = f"merged-{g_id}-{h_id}-{int(time.time())}"
     merged_id = await _upload_and_poll(
-        ctx, payload, sport_type, athlete_id, g_id, h_id
+        ctx,
+        payload,
+        sport_type,
+        external_id,
+        hevy.name,
+        hevy.description,
+        athlete_id,
+        g_id,
+        h_id,
     )
     if merged_id is None:
         return {"status": "error", "reason": "upload_failed", "payload": payload}
@@ -766,6 +778,9 @@ async def _upload_and_poll(
     ctx: AppContext,
     payload: dict[str, Any],
     sport_type: str,
+    external_id: str,
+    name: str | None,
+    description: str | None,
     athlete_id: int,
     g_id: int | None,
     h_id: int | None,
@@ -775,7 +790,13 @@ async def _upload_and_poll(
     settings = ctx.settings
 
     try:
-        result = await ctx.strava.create_upload(payload, sport_type=sport_type)
+        result = await ctx.strava.create_upload(
+            payload,
+            sport_type=sport_type,
+            external_id=external_id,
+            name=name,
+            description=description,
+        )
     except StravaApiError as exc:
         log_stage_error(
             log,

@@ -7,6 +7,7 @@ the stage-specific diagnostic logging the spec requires.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from .config import Settings
@@ -160,17 +161,45 @@ def unmapped_exercise_names(hevy: StravaActivity, settings: Settings) -> list[st
     return names
 
 
-def _build_description(sets: list[dict[str, Any]]) -> str:
-    exercise_types = []
-    for s in sets:
-        et = s.get("exercise_type")
-        if et and et not in exercise_types:
-            exercise_types.append(et)
-    parts = [f"{len(sets)} sets"]
-    if exercise_types:
-        parts.append(f"{len(exercise_types)} exercises")
-    parts.append("HR from Garmin, sets from Hevy")
-    return " · ".join(parts)
+def _merged_start_time(garmin: StravaActivity, hevy: StravaActivity) -> str | None:
+    """Start time for the merged activity: the midpoint of the two source starts.
+
+    Strava dedupes uploads by start time, so reusing either original's start
+    (while that original still exists) gets the merged activity rejected as a
+    duplicate. The midpoint differs from both — and is maximally far from each —
+    while staying an honest "when the workout started". Falls back to Garmin's
+    start when only one is parseable (``None`` if Garmin's is absent, so it is
+    flagged as missing).
+    """
+    gd = garmin.start_datetime()
+    hd = hevy.start_datetime()
+    if gd and hd:
+        midpoint = datetime.fromtimestamp(
+            round((gd.timestamp() + hd.timestamp()) / 2), tz=timezone.utc
+        )
+        return midpoint.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return garmin.start_date
+
+
+def _merged_elapsed(garmin: StravaActivity, hevy: StravaActivity) -> int | None:
+    """elapsed_time for the merged activity: average end minus midpoint start.
+
+    Each source's end is ``start + elapsed_time``; we average the two ends and
+    subtract the midpoint start (the same midpoint used for ``start_time``).
+    Falls back to Garmin's ``elapsed_time`` when any component is missing.
+    """
+    gd, hd = garmin.start_datetime(), hevy.start_datetime()
+    if (
+        gd is None
+        or hd is None
+        or garmin.elapsed_time is None
+        or hevy.elapsed_time is None
+    ):
+        return garmin.elapsed_time
+    g_end = gd.timestamp() + garmin.elapsed_time
+    h_end = hd.timestamp() + hevy.elapsed_time
+    midpoint_start = (gd.timestamp() + hd.timestamp()) / 2
+    return round((g_end + h_end) / 2 - midpoint_start)
 
 
 def build_merged_payload(
@@ -190,11 +219,10 @@ def build_merged_payload(
 
     payload: dict[str, Any] = {
         "version": "1.0",
-        "start_time": garmin.start_date,
+        "start_time": _merged_start_time(garmin, hevy),
         "utc_offset": int(garmin.utc_offset) if garmin.utc_offset is not None else None,
-        "elapsed_time": garmin.elapsed_time,
+        "elapsed_time": _merged_elapsed(garmin, hevy),
         "active_time": garmin.moving_time,
-        "description": _build_description(sets),
         "streams": {
             "time": time_data,
             "heartrate": heartrate_data,

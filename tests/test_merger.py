@@ -131,6 +131,57 @@ def test_build_merged_payload_shape(settings: Settings) -> None:
     assert payload["sets"][1]["weight"] == 100.0
 
 
+def test_build_merged_payload_start_time_is_average_of_both(
+    settings: Settings,
+) -> None:
+    # Strava dedupes by start time, so the merged activity must not exactly
+    # match either original; the midpoint of the two starts dodges both.
+    g = garmin_activity(start_date="2026-06-04T09:29:10Z")
+    h = make_activity(
+        id=222,
+        start_date="2026-06-04T09:28:50Z",
+        sets=[{"exercise": {"name": "Deadlift (Barbell)"}, "reps": 6, "weight": 55.0}],
+    )
+    payload = build_merged_payload(g, h, [70], [0], settings)
+    assert payload["start_time"] == "2026-06-04T09:29:00Z"  # midpoint of :10 and :50
+
+
+def test_build_merged_payload_elapsed_is_averaged_window(
+    settings: Settings,
+) -> None:
+    # elapsed_time = average(end) - midpoint(start). Starts 10:00:00/10:00:40
+    # (midpoint 10:00:20); ends 10:05:00/10:07:00 (avg 10:06:00) -> 340s.
+    g = garmin_activity(start_date="2026-06-04T10:00:00Z", elapsed_time=300)
+    h = make_activity(
+        id=222,
+        start_date="2026-06-04T10:00:40Z",
+        elapsed_time=380,
+        sets=[{"exercise": {"name": "Deadlift (Barbell)"}, "reps": 6, "weight": 55.0}],
+    )
+    payload = build_merged_payload(g, h, [70], [0], settings)
+    assert payload["start_time"] == "2026-06-04T10:00:20Z"
+    assert payload["elapsed_time"] == 340
+
+
+def test_build_merged_payload_has_no_description_key(settings: Settings) -> None:
+    # Description moves to an upload form field (Hevy's text), not the JSON body.
+    payload = build_merged_payload(
+        garmin_activity(), hevy_activity(), [70], [0], settings
+    )
+    assert "description" not in payload
+
+
+def test_build_merged_payload_start_time_falls_back_to_garmin(
+    settings: Settings,
+) -> None:
+    # When only one start is parseable, fall back to Garmin's (None stays None
+    # so it's flagged as missing).
+    g = garmin_activity(start_date="2026-06-04T09:29:10Z")
+    h = make_activity(id=222, start_date=None, sets=[{"reps": 5, "weight": 10.0}])
+    payload = build_merged_payload(g, h, [70], [0], settings)
+    assert payload["start_time"] == "2026-06-04T09:29:10Z"
+
+
 def test_build_merged_payload_utc_offset_and_active_time(settings: Settings) -> None:
     g = garmin_activity(utc_offset=28800.0, moving_time=383)
     payload = build_merged_payload(g, hevy_activity(), [70], [0], settings)
