@@ -2,8 +2,7 @@
 
 A small webhook-driven FastAPI service that watches for new **strength
 activities** synced to Strava from **Garmin** and **Hevy**, merges them into a
-single activity — Garmin's heart-rate stream + Hevy's exercise/set data — and
-optionally deletes the two originals.
+single activity — Garmin's heart-rate stream + Hevy's exercise/set data.
 
 It runs as a single replica with all state held in memory (a short-lived
 "pending" buffer). No database.
