@@ -91,12 +91,33 @@ requirements.txt / requirements-dev.txt
 | `DELETE_ORIGINALS` | `true` | Delete both source activities after a confirmed merge |
 | `LOG_LEVEL` | `INFO` | `INFO` or `DEBUG` |
 | `MANAGE_WEBHOOK_SUBSCRIPTION` | `true` | Verify/create the Strava push subscription on startup |
+| `FALLBACK_EXERCISE_TYPE` | `WEIGHT_TRAINING_GENERIC` | `exercise_type` used when a Hevy exercise name can't be mapped to a Strava enum (a per-category generic is tried first) |
+| `ADMIN_TOKEN` | — | Bearer token guarding `POST /merge`; leave unset to disable that endpoint *(secret)* |
 
 `MERGED_ACTIVITY_VISIBILITY` defaults to `only_me` on purpose — a fresh or
 misconfigured deploy will never publish an activity more widely than intended.
 Verify a few merges look right, then switch to your preferred visibility.
 
 Secrets belong in the Kubernetes Secret; everything else in the ConfigMap.
+
+### Manual merge endpoint
+
+`POST /merge` runs the merge on two given activity IDs, for testing the
+build + upload without recording real workouts repeatedly. It is disabled
+unless `ADMIN_TOKEN` is set (then returns `503`), and requires a matching
+bearer token (`401` otherwise). Roles are resolved from the activities, so the
+order of `garmin_id`/`hevy_id` doesn't matter.
+
+```bash
+# dry_run: build + return the payload, no upload or delete (safe to repeat)
+curl -X POST https://strava-merger.example.com/merge \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"garmin_id": 18780904442, "hevy_id": 18780893099, "dry_run": true}'
+```
+
+Drop `dry_run` (or set it `false`) to run the full pipeline, including deleting
+the originals when `DELETE_ORIGINALS=true`.
 
 ---
 
