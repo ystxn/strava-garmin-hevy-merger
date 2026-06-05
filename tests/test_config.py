@@ -16,7 +16,6 @@ def test_defaults(settings: Settings) -> None:
     assert settings.pending_ttl_seconds == 600
     assert settings.match_window_seconds == 300
     assert settings.merged_activity_visibility == "only_me"
-    assert settings.delete_originals is True
     assert settings.log_level == "INFO"
 
 
@@ -47,12 +46,6 @@ def test_log_level_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
     with pytest.raises(ValidationError):
         get_settings()
-
-
-def test_delete_originals_bool_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("DELETE_ORIGINALS", "false")
-    get_settings.cache_clear()
-    assert get_settings().delete_originals is False
 
 
 def test_public_base_url_strips_trailing_slash(

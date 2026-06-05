@@ -48,7 +48,6 @@ class Settings(BaseSettings):
     pending_ttl_seconds: int = 600
     match_window_seconds: int = 300
     merged_activity_visibility: Visibility = "only_me"
-    delete_originals: bool = True
     log_level: str = "INFO"
 
     # --- Internal tunables (not in the spec env table; safe defaults) ------
@@ -108,7 +107,6 @@ class Settings(BaseSettings):
             "pending_ttl_seconds": self.pending_ttl_seconds,
             "match_window_seconds": self.match_window_seconds,
             "merged_activity_visibility": self.merged_activity_visibility,
-            "delete_originals": self.delete_originals,
             "log_level": self.log_level,
             "eviction_interval_seconds": self.eviction_interval_seconds,
             "upload_poll_interval_seconds": self.upload_poll_interval_seconds,

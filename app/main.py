@@ -236,10 +236,11 @@ async def manual_merge(request: Request) -> JSONResponse:
     """Manually merge two given Strava activity IDs (testing / ops).
 
     Guarded by ``ADMIN_TOKEN``. ``dry_run`` builds and returns the payload
-    without uploading or deleting; otherwise runs the full pipeline (honouring
-    ``DELETE_ORIGINALS``). Runs synchronously so the response carries the
-    outcome. Roles are resolved from the activities themselves, so the order of
-    ``garmin_id``/``hevy_id`` does not matter.
+    without uploading; otherwise it uploads the merged activity (the source
+    activities are always left intact — the API can't delete them). Runs
+    synchronously so the response carries the outcome. Roles are resolved from
+    the activities themselves, so the order of ``garmin_id``/``hevy_id`` does
+    not matter.
     """
     ctx: AppContext = request.app.state.ctx
     settings = ctx.settings
@@ -746,31 +747,10 @@ async def run_merge(
         merged_activity_id=merged_id,
     )
 
-    # --- Stage: delete ---------------------------------------------------
-    if settings.delete_originals:
-        await _delete_original(ctx, garmin.id, "garmin", athlete_id, g_id, h_id)
-        await _delete_original(ctx, hevy.id, "hevy", athlete_id, g_id, h_id)
-        log_stage_event(
-            log,
-            "Deleted both source activities after successful merge",
-            stage="delete",
-            athlete_id=athlete_id,
-            garmin_activity_id=g_id,
-            hevy_activity_id=h_id,
-            merged_activity_id=merged_id,
-        )
-    else:
-        log_stage_event(
-            log,
-            "DELETE_ORIGINALS=false; leaving originals intact for manual "
-            "cleanup",
-            stage="delete",
-            athlete_id=athlete_id,
-            garmin_activity_id=g_id,
-            hevy_activity_id=h_id,
-            merged_activity_id=merged_id,
-        )
-
+    # The source activities are intentionally left intact: Strava's API does not
+    # permit activity deletion for this app (DELETE returns 401 Application/
+    # internal/invalid; it requires a separate app-level permission requested
+    # from Strava). See the strava-upload-dedup memory.
     return {"status": "merged", "merged_activity_id": merged_id}
 
 
@@ -934,57 +914,6 @@ async def _upload_and_poll(
         include_traceback=False,
     )
     return None
-
-
-async def _delete_original(
-    ctx: AppContext,
-    activity_id: int | None,
-    source: str,
-    athlete_id: int,
-    g_id: int | None,
-    h_id: int | None,
-) -> None:
-    log = ctx.logger
-    if activity_id is None:
-        return
-    try:
-        await ctx.strava.delete_activity(activity_id)
-        log_stage_event(
-            log,
-            f"Deleted {source} source activity",
-            stage="delete",
-            athlete_id=athlete_id,
-            garmin_activity_id=g_id,
-            hevy_activity_id=h_id,
-            activity_id=activity_id,
-            source=source,
-        )
-    except StravaApiError as exc:
-        log_stage_error(
-            log,
-            f"Failed to delete {source} source activity",
-            stage="delete",
-            athlete_id=athlete_id,
-            garmin_activity_id=g_id,
-            hevy_activity_id=h_id,
-            activity_id=activity_id,
-            source=source,
-            http_status=exc.status_code,
-            error=str(exc),
-            **clip_body(exc.body),
-        )
-    except Exception as exc:
-        log_stage_error(
-            log,
-            f"Unexpected error deleting {source} source activity",
-            stage="delete",
-            athlete_id=athlete_id,
-            garmin_activity_id=g_id,
-            hevy_activity_id=h_id,
-            activity_id=activity_id,
-            source=source,
-            error=f"{type(exc).__name__}: {exc}",
-        )
 
 
 # --------------------------------------------------------------------------- #

@@ -188,19 +188,6 @@ class StravaClient:
             keys_returned=list(streams.keys()),
         )
 
-    async def delete_activity(self, activity_id: int) -> httpx.Response:
-        url = f"{API_BASE}/activities/{activity_id}"
-        resp = await self._request("DELETE", url)
-        if resp.status_code not in (200, 204):
-            raise StravaApiError(
-                f"DELETE activity {activity_id} returned {resp.status_code}",
-                method="DELETE",
-                url=url,
-                status_code=resp.status_code,
-                body=_body_text(resp),
-            )
-        return resp
-
     # -- uploads -----------------------------------------------------------
 
     async def create_upload(

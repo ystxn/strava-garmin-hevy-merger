@@ -209,7 +209,7 @@ async def test_webhook_validation_bad_token() -> None:
 
 
 @pytest.mark.usefixtures("merge_env")
-async def test_full_merge_flow_deletes_originals() -> None:
+async def test_full_merge_flow_uploads_and_keeps_originals() -> None:
     with respx.mock(assert_all_called=False) as router:
         _register_common_routes(router)
         upload_route = router.route(
@@ -227,12 +227,11 @@ async def test_full_merge_flow_deletes_originals() -> None:
                 },
             )
         )
-        del_garmin = router.route(
-            method="DELETE", host=HOST, path="/api/v3/activities/111"
-        ).mock(return_value=httpx.Response(204))
-        del_hevy = router.route(
-            method="DELETE", host=HOST, path="/api/v3/activities/222"
-        ).mock(return_value=httpx.Response(204))
+        # Tripwire: the merge must never attempt to delete the originals
+        # (the Strava API doesn't permit it for this app).
+        del_route = router.route(method="DELETE").mock(
+            return_value=httpx.Response(204)
+        )
 
         async with LifespanManager(app):
             ctx = app.state.ctx
@@ -265,48 +264,10 @@ async def test_full_merge_flow_deletes_originals() -> None:
         assert fields["name"].decode() == "Strength B"
         assert b"hevyapp.com" in fields["description"]
 
-        # Both originals were deleted; the merged id is remembered.
-        assert del_garmin.called
-        assert del_hevy.called
+        # Originals are left intact: no delete is attempted; merged id remembered.
+        assert not del_route.called
         assert 555 in ctx.processed_activity_ids
-        assert {111, 222} <= ctx.processed_activity_ids
         assert ctx.matcher.pending_count() == 0
-
-
-@pytest.mark.usefixtures("merge_env")
-async def test_merge_keeps_originals_when_delete_disabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DELETE_ORIGINALS", "false")
-    get_settings.cache_clear()
-
-    with respx.mock(assert_all_called=False) as router:
-        _register_common_routes(router)
-        router.route(method="POST", host=HOST, path="/api/v3/uploads").mock(
-            return_value=httpx.Response(
-                201, json={"id": 999, "error": None, "activity_id": 555}
-            )
-        )
-        del_garmin = router.route(
-            method="DELETE", host=HOST, path="/api/v3/activities/111"
-        ).mock(return_value=httpx.Response(204))
-        del_hevy = router.route(
-            method="DELETE", host=HOST, path="/api/v3/activities/222"
-        ).mock(return_value=httpx.Response(204))
-
-        async with LifespanManager(app):
-            ctx = app.state.ctx
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(
-                transport=transport, base_url=BASE_URL
-            ) as client:
-                await client.post("/webhook", json=_event(111))
-                await client.post("/webhook", json=_event(222))
-                await _drain(ctx)
-
-        assert not del_garmin.called
-        assert not del_hevy.called
-        assert 555 in ctx.processed_activity_ids
 
 
 @pytest.mark.usefixtures("merge_env")
@@ -459,7 +420,6 @@ def admin_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UPLOAD_POLL_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("UPLOAD_POLL_MAX_ATTEMPTS", "3")
     monkeypatch.setenv("ADMIN_TOKEN", "secret-admin")
-    monkeypatch.setenv("DELETE_ORIGINALS", "false")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

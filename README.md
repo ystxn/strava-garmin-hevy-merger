@@ -24,12 +24,19 @@ Hevy   → Strava ─┘                         └─ this service
       (same athlete, start within MATCH_WINDOW, other source)
    5. on a match: fetch Garmin HR stream, take Hevy sets
    6. build merged JSON, upload to Strava, poll until ready
-   7. DELETE_ORIGINALS=true → delete both originals
-      DELETE_ORIGINALS=false → leave them, log all three IDs
+   7. log all three activity IDs (the two source activities are left intact —
+      see note below)
 ```
 
 If only one half ever arrives, the buffered entry is evicted after
 `PENDING_TTL_SECONDS` and the activity is left untouched on Strava.
+
+> **Note:** the Garmin and Hevy originals are **not** deleted. Strava's API does
+> not permit activity deletion for this app (`DELETE /activities/{id}` returns
+> `401 Authorization Error / Application / internal / invalid`); deletion needs a
+> separate app-level permission requested from Strava. A merged workout
+> therefore coexists with its two source activities until you delete the
+> originals manually (or that permission is granted — see the code comments).
 
 > **Note on the Strava upload format.** This service follows the JSON
 > upload shape described in the spec (`sets` + `streams` in the POST body).
@@ -88,7 +95,6 @@ requirements.txt / requirements-dev.txt
 | `PENDING_TTL_SECONDS` | `600` | How long to wait for the matching activity |
 | `MATCH_WINDOW_SECONDS` | `300` | Start-time tolerance when pairing |
 | `MERGED_ACTIVITY_VISIBILITY` | `only_me` | `everyone` / `followers_only` / `only_me` |
-| `DELETE_ORIGINALS` | `true` | Delete both source activities after a confirmed merge |
 | `LOG_LEVEL` | `INFO` | `INFO` or `DEBUG` |
 | `MANAGE_WEBHOOK_SUBSCRIPTION` | `true` | Verify/create the Strava push subscription on startup |
 | `FALLBACK_EXERCISE_TYPE` | `WEIGHT_TRAINING_GENERIC` | `exercise_type` used when a Hevy exercise name can't be mapped to a Strava enum (a per-category generic is tried first) |
@@ -109,15 +115,15 @@ bearer token (`401` otherwise). Roles are resolved from the activities, so the
 order of `garmin_id`/`hevy_id` doesn't matter.
 
 ```bash
-# dry_run: build + return the payload, no upload or delete (safe to repeat)
+# dry_run: build + return the payload, no upload (safe to repeat)
 curl -X POST https://strava-merger.example.com/merge \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"garmin_id": 18780904442, "hevy_id": 18780893099, "dry_run": true}'
 ```
 
-Drop `dry_run` (or set it `false`) to run the full pipeline, including deleting
-the originals when `DELETE_ORIGINALS=true`.
+Drop `dry_run` (or set it `false`) to upload the merged activity for real (the
+source activities are left intact).
 
 ---
 
