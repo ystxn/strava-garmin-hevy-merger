@@ -250,9 +250,9 @@ async def test_full_merge_flow_uploads_and_keeps_originals() -> None:
         request = upload_route.calls[0].request
         payload = _uploaded_json(request)
         assert payload["version"] == "1.0"
-        # Midpoint of Garmin 10:00:00 and Hevy 10:00:20 (dedup avoidance).
-        assert payload["start_time"] == "2026-01-01T10:00:10Z"
-        # avg(end) 10:59:20 - midpoint start 10:00:10 = 3550s.
+        # One minute after the later start (Hevy 10:00:20) for dedup avoidance.
+        assert payload["start_time"] == "2026-01-01T10:01:20Z"
+        # Average of the two durations: (3600 + 3500) / 2 = 3550s.
         assert payload["elapsed_time"] == 3550
         assert len(payload["sets"]) == 2
         assert payload["sets"][0]["exercise_type"] == "BENCH_PRESS_GENERIC"

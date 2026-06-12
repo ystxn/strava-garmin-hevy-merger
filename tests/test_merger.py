@@ -114,7 +114,7 @@ def test_build_merged_payload_shape(settings: Settings) -> None:
     payload = build_merged_payload(g, h, [70, 72, 75], [0, 1, 2], settings)
 
     assert payload["version"] == "1.0"
-    assert payload["start_time"] == "2026-01-01T10:00:00Z"
+    assert payload["start_time"] == "2026-01-01T10:01:00Z"  # later start + 1 min
     assert payload["elapsed_time"] == 3600
     # Streams are bare arrays, not {"data": [...]}.
     assert payload["streams"]["heartrate"] == [70, 72, 75]
@@ -131,11 +131,12 @@ def test_build_merged_payload_shape(settings: Settings) -> None:
     assert payload["sets"][1]["weight"] == 100.0
 
 
-def test_build_merged_payload_start_time_is_average_of_both(
+def test_build_merged_payload_start_time_is_after_later_start(
     settings: Settings,
 ) -> None:
     # Strava dedupes by start time, so the merged activity must not exactly
-    # match either original; the midpoint of the two starts dodges both.
+    # match either original; one minute after the chronologically later start
+    # dodges both, regardless of which source is the later one.
     g = garmin_activity(start_date="2026-06-04T09:29:10Z")
     h = make_activity(
         id=222,
@@ -143,14 +144,22 @@ def test_build_merged_payload_start_time_is_average_of_both(
         sets=[{"exercise": {"name": "Deadlift (Barbell)"}, "reps": 6, "weight": 55.0}],
     )
     payload = build_merged_payload(g, h, [70], [0], settings)
-    assert payload["start_time"] == "2026-06-04T09:29:00Z"  # midpoint of :10 and :50
+    assert payload["start_time"] == "2026-06-04T09:30:10Z"  # garmin is later
+
+    g2 = garmin_activity(start_date="2026-06-04T09:28:50Z")
+    h2 = make_activity(
+        id=222,
+        start_date="2026-06-04T09:29:10Z",
+        sets=[{"exercise": {"name": "Deadlift (Barbell)"}, "reps": 6, "weight": 55.0}],
+    )
+    payload2 = build_merged_payload(g2, h2, [70], [0], settings)
+    assert payload2["start_time"] == "2026-06-04T09:30:10Z"  # hevy is later
 
 
-def test_build_merged_payload_elapsed_is_averaged_window(
+def test_build_merged_payload_elapsed_is_average_duration(
     settings: Settings,
 ) -> None:
-    # elapsed_time = average(end) - midpoint(start). Starts 10:00:00/10:00:40
-    # (midpoint 10:00:20); ends 10:05:00/10:07:00 (avg 10:06:00) -> 340s.
+    # elapsed_time = average of the two durations: (300 + 380) / 2 = 340s.
     g = garmin_activity(start_date="2026-06-04T10:00:00Z", elapsed_time=300)
     h = make_activity(
         id=222,
@@ -159,7 +168,7 @@ def test_build_merged_payload_elapsed_is_averaged_window(
         sets=[{"exercise": {"name": "Deadlift (Barbell)"}, "reps": 6, "weight": 55.0}],
     )
     payload = build_merged_payload(g, h, [70], [0], settings)
-    assert payload["start_time"] == "2026-06-04T10:00:20Z"
+    assert payload["start_time"] == "2026-06-04T10:01:40Z"  # later start + 1 min
     assert payload["elapsed_time"] == 340
 
 

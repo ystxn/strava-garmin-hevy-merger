@@ -15,24 +15,7 @@ def _settings(**overrides: str) -> Settings:
 def test_defaults(settings: Settings) -> None:
     assert settings.pending_ttl_seconds == 600
     assert settings.match_window_seconds == 300
-    assert settings.merged_activity_visibility == "only_me"
     assert settings.log_level == "INFO"
-
-
-def test_visibility_must_be_in_allowed_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MERGED_ACTIVITY_VISIBILITY", "public")
-    get_settings.cache_clear()
-    with pytest.raises(ValidationError):
-        get_settings()
-
-
-@pytest.mark.parametrize("value", ["everyone", "followers_only", "only_me"])
-def test_visibility_allowed_values(
-    monkeypatch: pytest.MonkeyPatch, value: str
-) -> None:
-    monkeypatch.setenv("MERGED_ACTIVITY_VISIBILITY", value)
-    get_settings.cache_clear()
-    assert get_settings().merged_activity_visibility == value
 
 
 def test_log_level_normalised(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -62,4 +45,4 @@ def test_public_dict_excludes_secrets(settings: Settings) -> None:
     public = settings.public_dict()
     assert "strava_client_secret" not in public
     assert "strava_refresh_token" not in public
-    assert public["merged_activity_visibility"] == "only_me"
+    assert public["match_window_seconds"] == 300

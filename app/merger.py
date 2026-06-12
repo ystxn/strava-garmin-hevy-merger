@@ -7,7 +7,7 @@ the stage-specific diagnostic logging the spec requires.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import timedelta, timezone
 from typing import Any
 
 from .config import Settings
@@ -162,44 +162,32 @@ def unmapped_exercise_names(hevy: StravaActivity, settings: Settings) -> list[st
 
 
 def _merged_start_time(garmin: StravaActivity, hevy: StravaActivity) -> str | None:
-    """Start time for the merged activity: the midpoint of the two source starts.
+    """Start time for the merged activity: one minute after the later source start.
 
     Strava dedupes uploads by start time, so reusing either original's start
     (while that original still exists) gets the merged activity rejected as a
-    duplicate. The midpoint differs from both — and is maximally far from each —
-    while staying an honest "when the workout started". Falls back to Garmin's
-    start when only one is parseable (``None`` if Garmin's is absent, so it is
-    flagged as missing).
+    duplicate. One minute after the chronologically later start (regardless of
+    which source synced first) differs from both while keeping the merged
+    activity adjacent to the workout. Falls back to Garmin's start when only
+    one is parseable (``None`` if Garmin's is absent, so it is flagged as
+    missing).
     """
     gd = garmin.start_datetime()
     hd = hevy.start_datetime()
     if gd and hd:
-        midpoint = datetime.fromtimestamp(
-            round((gd.timestamp() + hd.timestamp()) / 2), tz=timezone.utc
-        )
-        return midpoint.strftime("%Y-%m-%dT%H:%M:%SZ")
+        moved = max(gd, hd).astimezone(timezone.utc) + timedelta(minutes=1)
+        return moved.strftime("%Y-%m-%dT%H:%M:%SZ")
     return garmin.start_date
 
 
 def _merged_elapsed(garmin: StravaActivity, hevy: StravaActivity) -> int | None:
-    """elapsed_time for the merged activity: average end minus midpoint start.
+    """elapsed_time for the merged activity: the average of the two durations.
 
-    Each source's end is ``start + elapsed_time``; we average the two ends and
-    subtract the midpoint start (the same midpoint used for ``start_time``).
-    Falls back to Garmin's ``elapsed_time`` when any component is missing.
+    Falls back to Garmin's ``elapsed_time`` when Hevy's is missing.
     """
-    gd, hd = garmin.start_datetime(), hevy.start_datetime()
-    if (
-        gd is None
-        or hd is None
-        or garmin.elapsed_time is None
-        or hevy.elapsed_time is None
-    ):
+    if garmin.elapsed_time is None or hevy.elapsed_time is None:
         return garmin.elapsed_time
-    g_end = gd.timestamp() + garmin.elapsed_time
-    h_end = hd.timestamp() + hevy.elapsed_time
-    midpoint_start = (gd.timestamp() + hd.timestamp()) / 2
-    return round((g_end + h_end) / 2 - midpoint_start)
+    return round((garmin.elapsed_time + hevy.elapsed_time) / 2)
 
 
 def build_merged_payload(

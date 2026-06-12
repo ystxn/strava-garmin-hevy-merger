@@ -93,17 +93,15 @@ requirements.txt / requirements-dev.txt
 | `PUBLIC_BASE_URL` | — | Public base URL, e.g. `https://strava-merger.example.com` |
 | `PENDING_TTL_SECONDS` | `600` | How long to wait for the matching activity |
 | `MATCH_WINDOW_SECONDS` | `300` | Start-time tolerance when pairing |
-| `MERGED_ACTIVITY_VISIBILITY` | `only_me` | `everyone` / `followers_only` / `only_me` |
 | `LOG_LEVEL` | `INFO` | `INFO` or `DEBUG` |
 | `MANAGE_WEBHOOK_SUBSCRIPTION` | `true` | Verify/create the Strava push subscription on startup |
 | `FALLBACK_EXERCISE_TYPE` | `TOTAL_BODY_GENERIC` | `exercise_type` used when a Hevy exercise name can't be mapped to a Strava enum (a per-category generic is tried first). Must be a value Strava renders — `WEIGHT_TRAINING_GENERIC` shows as "Unknown" |
 | `ADMIN_TOKEN` | — | Bearer token guarding `POST /merge`; leave unset to disable that endpoint *(secret)* |
 
-`MERGED_ACTIVITY_VISIBILITY` defaults to `only_me` on purpose — a fresh or
-misconfigured deploy will never publish an activity more widely than intended.
-Verify a few merges look right, then switch to your preferred visibility.
-
 Secrets belong in the Kubernetes Secret; everything else in the ConfigMap.
+
+Merged activities are created with your Strava account's default activity
+privacy — the upload API does not allow overriding it per-activity.
 
 ### Manual merge endpoint
 
