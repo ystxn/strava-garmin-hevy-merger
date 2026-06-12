@@ -13,4 +13,5 @@ data:
   MANAGE_WEBHOOK_SUBSCRIPTION: "true"
   # exercise_type used when a Hevy exercise name can't be mapped to a Strava
   # enum (a per-category generic is tried first).
-  FALLBACK_EXERCISE_TYPE: "WEIGHT_TRAINING_GENERIC"
+  # Must be an enum Strava renders; WEIGHT_TRAINING_GENERIC shows as "Unknown".
+  FALLBACK_EXERCISE_TYPE: "TOTAL_BODY_GENERIC"

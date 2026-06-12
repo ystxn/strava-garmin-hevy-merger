@@ -27,6 +27,19 @@ _CURATED: dict[str, str] = {
 # Movement keyword -> category generic. Checked in order, so put more specific
 # multi-word keys before the single-word ones they contain.
 _KEYWORD_GENERICS: tuple[tuple[str, str], ...] = (
+    # Pull-ups: Strava renders the bare PULL_UP / CHIN_UP enums as "Unknown";
+    # only the category generic PULL_UP_GENERIC is accepted (verified live).
+    ("pull up", "PULL_UP_GENERIC"),
+    ("pull-up", "PULL_UP_GENERIC"),
+    ("pullup", "PULL_UP_GENERIC"),
+    ("chin up", "PULL_UP_GENERIC"),
+    ("chin-up", "PULL_UP_GENERIC"),
+    ("chinup", "PULL_UP_GENERIC"),
+    # Face pull -> FACE_PULL (specific name is accepted); before "row".
+    ("face pull", "FACE_PULL"),
+    # Twists -> RUSSIAN_TWIST / CORE_GENERIC (both accepted); specific first.
+    ("russian twist", "RUSSIAN_TWIST"),
+    ("twist", "CORE_GENERIC"),
     ("hip abduction", "HIP_STABILITY_GENERIC"),
     ("hip adduction", "HIP_STABILITY_GENERIC"),
     ("hip thrust", "HIP_RAISE_GENERIC"),

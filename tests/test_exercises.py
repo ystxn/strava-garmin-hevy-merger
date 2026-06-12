@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.exercises import to_exercise_type
 
-FALLBACK = "WEIGHT_TRAINING_GENERIC"
+FALLBACK = "TOTAL_BODY_GENERIC"
 
 
 def test_curated_exact_names() -> None:
@@ -40,6 +40,22 @@ def test_keyword_falls_back_to_category_generic() -> None:
         "CURL_GENERIC",
         True,
     )
+
+
+def test_pull_face_pull_and_twist_map_to_valid_enums() -> None:
+    # These three previously fell through to WEIGHT_TRAINING_GENERIC, which
+    # Strava renders as "Unknown". The mapped enums below were verified live to
+    # render real names (Pull Up / Face Pull / Russian Twist).
+    cases = {
+        "Pull Up": "PULL_UP_GENERIC",
+        "Pull-Up": "PULL_UP_GENERIC",
+        "Chin Up": "PULL_UP_GENERIC",
+        "Face Pull": "FACE_PULL",
+        "Russian Twist (Weighted)": "RUSSIAN_TWIST",
+    }
+    for name, expected in cases.items():
+        etype, matched = to_exercise_type(name, fallback=FALLBACK)
+        assert (etype, matched) == (expected, True), name
 
 
 def test_unmappable_uses_fallback_and_flags_unmatched() -> None:

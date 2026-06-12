@@ -72,9 +72,11 @@ class Settings(BaseSettings):
     # Preferred weight unit emitted in the merged payload.
     weight_units: str = "kilograms"
     # exercise_type used when a Hevy exercise name can't be mapped to a Strava
-    # enum (a per-category generic is tried first). Configurable so it can be
-    # corrected without a code change if Strava rejects it.
-    fallback_exercise_type: str = "WEIGHT_TRAINING_GENERIC"
+    # enum (a per-category generic is tried first). Must be a value Strava
+    # actually renders: WEIGHT_TRAINING_GENERIC shows as "Unknown" (verified
+    # live), whereas TOTAL_BODY_GENERIC renders "Total Body". Configurable so it
+    # can be corrected without a code change if Strava changes the enum set.
+    fallback_exercise_type: str = "TOTAL_BODY_GENERIC"
     # Bearer token guarding the manual POST /merge endpoint. When unset, the
     # endpoint is disabled (returns 503).
     admin_token: Optional[str] = None

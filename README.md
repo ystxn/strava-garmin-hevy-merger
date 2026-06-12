@@ -96,7 +96,7 @@ requirements.txt / requirements-dev.txt
 | `MERGED_ACTIVITY_VISIBILITY` | `only_me` | `everyone` / `followers_only` / `only_me` |
 | `LOG_LEVEL` | `INFO` | `INFO` or `DEBUG` |
 | `MANAGE_WEBHOOK_SUBSCRIPTION` | `true` | Verify/create the Strava push subscription on startup |
-| `FALLBACK_EXERCISE_TYPE` | `WEIGHT_TRAINING_GENERIC` | `exercise_type` used when a Hevy exercise name can't be mapped to a Strava enum (a per-category generic is tried first) |
+| `FALLBACK_EXERCISE_TYPE` | `TOTAL_BODY_GENERIC` | `exercise_type` used when a Hevy exercise name can't be mapped to a Strava enum (a per-category generic is tried first). Must be a value Strava renders — `WEIGHT_TRAINING_GENERIC` shows as "Unknown" |
 | `ADMIN_TOKEN` | — | Bearer token guarding `POST /merge`; leave unset to disable that endpoint *(secret)* |
 
 `MERGED_ACTIVITY_VISIBILITY` defaults to `only_me` on purpose — a fresh or
