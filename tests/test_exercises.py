@@ -27,13 +27,10 @@ def test_curated_is_case_insensitive() -> None:
 
 
 def test_keyword_falls_back_to_category_generic() -> None:
-    # Not in the curated dict, but the movement keyword is recognizable.
-    assert to_exercise_type("Romanian Deadlift", fallback=FALLBACK) == (
+    # No equipment to disambiguate, so these resolve to the category generic.
+    assert to_exercise_type("Squat", fallback=FALLBACK) == ("SQUAT_GENERIC", True)
+    assert to_exercise_type("Deadlift", fallback=FALLBACK) == (
         "DEADLIFT_GENERIC",
-        True,
-    )
-    assert to_exercise_type("Bent Over Row", fallback=FALLBACK) == (
-        "ROW_GENERIC",
         True,
     )
     assert to_exercise_type("Bicep Curl", fallback=FALLBACK) == (
@@ -56,6 +53,83 @@ def test_pull_face_pull_and_twist_map_to_valid_enums() -> None:
     for name, expected in cases.items():
         etype, matched = to_exercise_type(name, fallback=FALLBACK)
         assert (etype, matched) == (expected, True), name
+
+
+def test_chest_press_is_not_a_shoulder_press() -> None:
+    # Regression: "chest press" contains "press" and used to fall through to the
+    # bare-"press" catch-all -> SHOULDER_PRESS_GENERIC. It is a chest movement,
+    # and a machine chest press has its own specific enum.
+    assert to_exercise_type("Chest Press (Machine)", fallback=FALLBACK) == (
+        "MACHINE_CHEST_PRESS",
+        True,
+    )
+    assert to_exercise_type("Seated Chest Press (Machine)", fallback=FALLBACK) == (
+        "MACHINE_CHEST_PRESS",
+        True,
+    )
+    # Non-machine chest press has no specific enum, so the bench-press category
+    # is used — anything but SHOULDER_PRESS_GENERIC.
+    assert to_exercise_type("Chest Press (Dumbbell)", fallback=FALLBACK) == (
+        "BENCH_PRESS_GENERIC",
+        True,
+    )
+
+
+def test_rdl_maps_to_specific_romanian_deadlift() -> None:
+    # Regression: RDL used to fall to a generic (or the fallback for the bare
+    # abbreviation). Equipment now resolves to the specific Romanian deadlift.
+    assert to_exercise_type("Romanian Deadlift (Barbell)", fallback=FALLBACK) == (
+        "BARBELL_ROMANIAN_DEADLIFT",
+        True,
+    )
+    assert to_exercise_type("RDL (Barbell)", fallback=FALLBACK) == (
+        "BARBELL_ROMANIAN_DEADLIFT",
+        True,
+    )
+    assert to_exercise_type("Romanian Deadlift (Dumbbell)", fallback=FALLBACK) == (
+        "DUMBBELL_ROMANIAN_DEADLIFTS",
+        True,
+    )
+    # No equipment -> the Romanian-deadlift category enum (still not a plain
+    # conventional deadlift).
+    for name in ("RDL", "Romanian Deadlift"):
+        assert to_exercise_type(name, fallback=FALLBACK) == (
+            "ROMANIAN_DEADLIFTS",
+            True,
+        ), name
+
+
+def test_session_exercises_map_to_specific_enums() -> None:
+    # The exact set the user flagged: only the generics for Pull Up / Sit Up
+    # were acceptable; the rest must resolve to specific equipment enums.
+    cases = {
+        "Squat (Barbell)": "BARBELL_BACK_SQUAT",
+        "Chest Press (Machine)": "MACHINE_CHEST_PRESS",
+        "Romanian Deadlift (Barbell)": "BARBELL_ROMANIAN_DEADLIFT",
+        "Chest Supported Row (Dumbbell)": "CHEST_SUPPORTED_ROW",
+        "Chest-Supported Row (Machine)": "MACHINE_CHEST_SUPPORTED_ROW",
+        "Pull Up": "PULL_UP_GENERIC",
+        "Sit Up (Weighted)": "SIT_UP_GENERIC",
+    }
+    for name, expected in cases.items():
+        etype, matched = to_exercise_type(name, fallback=FALLBACK)
+        assert (etype, matched) == (expected, True), name
+
+
+def test_squat_variants_do_not_collapse_to_back_squat() -> None:
+    # The barbell-back-squat default must not swallow other barbell squats.
+    assert to_exercise_type("Front Squat (Barbell)", fallback=FALLBACK) == (
+        "BARBELL_FRONT_SQUAT",
+        True,
+    )
+    assert to_exercise_type("Bulgarian Split Squat (Barbell)", fallback=FALLBACK) == (
+        "SQUAT_GENERIC",
+        True,
+    )
+    assert to_exercise_type("Hack Squat (Machine)", fallback=FALLBACK) == (
+        "MACHINE_HACK_SQUAT",
+        True,
+    )
 
 
 def test_unmappable_uses_fallback_and_flags_unmatched() -> None:
