@@ -96,6 +96,72 @@ class StravaActivity(BaseModel):
     athlete: Athlete = Field(default_factory=Athlete)
     sets: list[StravaSet] = Field(default_factory=list)
 
+    # Remaining DetailedActivity fields Strava returns that the merge doesn't
+    # use. They were observed verbatim in production activity-detail payloads
+    # and are declared here only so the schema-drift canary
+    # (log_unexpected_fields) stops firing on every fetch and instead flags
+    # genuinely new/undocumented fields. Types are kept permissive (numerics
+    # widened to float, containers left loose) so a future type change can't
+    # escalate a benign warning into a fetch-breaking ValidationError.
+    resource_state: Optional[int] = None
+    workout_type: Optional[int] = None
+    upload_id: Optional[int] = None
+    upload_id_str: Optional[str] = None
+    distance: Optional[float] = None
+    average_speed: Optional[float] = None
+    max_speed: Optional[float] = None
+    average_cadence: Optional[float] = None
+    average_temp: Optional[float] = None
+    average_watts: Optional[float] = None
+    max_watts: Optional[float] = None
+    weighted_average_watts: Optional[float] = None
+    device_watts: Optional[bool] = None
+    kilojoules: Optional[float] = None
+    calories: Optional[float] = None
+    total_elevation_gain: Optional[float] = None
+    elev_high: Optional[float] = None
+    elev_low: Optional[float] = None
+    suffer_score: Optional[float] = None
+    perceived_exertion: Optional[float] = None
+    prefer_perceived_exertion: Optional[bool] = None
+    achievement_count: Optional[int] = None
+    kudos_count: Optional[int] = None
+    comment_count: Optional[int] = None
+    athlete_count: Optional[int] = None
+    photo_count: Optional[int] = None
+    total_photo_count: Optional[int] = None
+    pr_count: Optional[int] = None
+    has_kudoed: Optional[bool] = None
+    commute: Optional[bool] = None
+    manual: Optional[bool] = None
+    private: Optional[bool] = None
+    flagged: Optional[bool] = None
+    trainer: Optional[bool] = None
+    from_accepted_tag: Optional[bool] = None
+    hide_from_home: Optional[bool] = None
+    heartrate_opt_out: Optional[bool] = None
+    display_hide_heartrate_option: Optional[bool] = None
+    visibility: Optional[str] = None
+    sport_image_visibility: Optional[str] = None
+    timezone: Optional[str] = None
+    embed_token: Optional[str] = None
+    gear_id: Optional[str] = None
+    location_city: Optional[str] = None
+    location_state: Optional[str] = None
+    location_country: Optional[str] = None
+    map: Optional[dict[str, Any]] = None
+    photos: Optional[dict[str, Any]] = None
+    similar_activities: Optional[dict[str, Any]] = None
+    start_latlng: list[Any] = Field(default_factory=list)
+    end_latlng: list[Any] = Field(default_factory=list)
+    available_zones: list[Any] = Field(default_factory=list)
+    stats_visibility: list[Any] = Field(default_factory=list)
+    segment_efforts: list[Any] = Field(default_factory=list)
+    best_efforts: list[Any] = Field(default_factory=list)
+    laps: list[Any] = Field(default_factory=list)
+    splits_metric: list[Any] = Field(default_factory=list)
+    splits_standard: list[Any] = Field(default_factory=list)
+
     @property
     def athlete_id(self) -> int | None:
         return self.athlete.id if self.athlete else None
