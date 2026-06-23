@@ -115,6 +115,17 @@ def configure_logging(level: str = "INFO") -> None:
     ]
     access.addFilter(_HealthAccessFilter())
 
+    # httpx emits one INFO line per HTTP request ("HTTP Request: ..."). At
+    # steady state the subscription re-verification loop fires these every few
+    # minutes; they bury the real events and duplicate our own structured
+    # request logs. Keep them only when explicitly debugging: silence at INFO
+    # and above, surface again at DEBUG. httpcore's logs (all DEBUG-level
+    # connection chatter) stay off regardless — never useful here.
+    level_num = getattr(logging, level.upper(), logging.INFO)
+    httpx_level = logging.INFO if level_num <= logging.DEBUG else logging.WARNING
+    logging.getLogger("httpx").setLevel(httpx_level)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 
 def clip_body(body: Any) -> dict[str, Any]:
     """Render a response body / payload for logging, clipping only if huge.

@@ -124,10 +124,29 @@ def test_health_access_logs_are_suppressed(capsys) -> None:
     assert "/webhook" in out
 
 
-def test_client_secret_is_redacted_in_logs(capsys) -> None:
-    # httpx logs full request URLs at INFO; Strava's GET/DELETE put
-    # client_secret in the query string, which must never reach the logs.
+def test_httpx_request_logs_suppressed_at_info_shown_at_debug(capsys) -> None:
+    # httpx logs one INFO line per request; the subscription poll fires these
+    # every few minutes and drowns out real events. They must be hidden at the
+    # default INFO level and reappear only when debugging.
+    args = (
+        'HTTP Request: %s %s "%s"',
+        "GET",
+        "https://www.strava.com/api/v3/push_subscriptions?client_id=255222",
+        "HTTP/1.1 200 OK",
+    )
     configure_logging("INFO")
+    logging.getLogger("httpx").info(*args)
+    assert "HTTP Request" not in capsys.readouterr().out
+
+    configure_logging("DEBUG")
+    logging.getLogger("httpx").info(*args)
+    assert "HTTP Request" in capsys.readouterr().out
+
+
+def test_client_secret_is_redacted_in_logs(capsys) -> None:
+    # When httpx request logs are shown (DEBUG), Strava's GET/DELETE put
+    # client_secret in the query string, which must never reach the logs.
+    configure_logging("DEBUG")
     logging.getLogger("httpx").info(
         'HTTP Request: %s %s "%s"',
         "GET",
