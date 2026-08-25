@@ -132,6 +132,19 @@ def test_squat_variants_do_not_collapse_to_back_squat() -> None:
     )
 
 
+def test_lat_pulldown_variants_map_to_specific_enums() -> None:
+    cases = {
+        "Lat Pulldown (Cable)": "LAT_PULLDOWN",
+        "Close Grip Lat Pulldown (Cable)": "CABLE_LAT_PULLDOWN_CLOSE_GRIP",
+        "Single Arm Lat Pulldown (Cable)": "SINGLE_ARM_LAT_PULLDOWN",
+        "Underhand Lat Pulldown (Cable)": "UNDERHAND_LAT_PULLDOWN",
+        "Neutral Grip Lat Pulldown (Cable)": "NEUTRAL_GRIP_LAT_PULLDOWN",
+    }
+    for name, expected in cases.items():
+        etype, matched = to_exercise_type(name, fallback=FALLBACK)
+        assert (etype, matched) == (expected, True), name
+
+
 def test_unmappable_uses_fallback_and_flags_unmatched() -> None:
     etype, matched = to_exercise_type("Frobnicator 3000", fallback=FALLBACK)
     assert etype == FALLBACK

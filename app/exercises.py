@@ -64,6 +64,12 @@ _RULES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("chin up",), "PULL_UP_GENERIC"),
     (("chin-up",), "PULL_UP_GENERIC"),
     (("chinup",), "PULL_UP_GENERIC"),
+    # ---- Lat pulldown: grip/arm variants before the plain pulldown catch-all.
+    (("close grip", "lat pulldown"), "CABLE_LAT_PULLDOWN_CLOSE_GRIP"),
+    (("single arm", "lat pulldown"), "SINGLE_ARM_LAT_PULLDOWN"),
+    (("underhand", "lat pulldown"), "UNDERHAND_LAT_PULLDOWN"),
+    (("neutral grip", "lat pulldown"), "NEUTRAL_GRIP_LAT_PULLDOWN"),
+    (("lat pulldown",), "LAT_PULLDOWN"),
     # ---- Rows: chest-supported and other specifics before the "row" catch-all.
     (("chest supported row", "machine"), "MACHINE_CHEST_SUPPORTED_ROW"),
     (("chest-supported row", "machine"), "MACHINE_CHEST_SUPPORTED_ROW"),
