@@ -145,6 +145,16 @@ def test_lat_pulldown_variants_map_to_specific_enums() -> None:
         assert (etype, matched) == (expected, True), name
 
 
+def test_iso_lateral_high_row_maps_to_machine_enum() -> None:
+    cases = {
+        "Iso-Lateral High Row (Machine)": "MACHINE_ISOLATERAL_HIGH_ROW",
+        "Iso Lateral High Row (Machine)": "MACHINE_ISOLATERAL_HIGH_ROW",
+    }
+    for name, expected in cases.items():
+        etype, matched = to_exercise_type(name, fallback=FALLBACK)
+        assert (etype, matched) == (expected, True), name
+
+
 def test_unmappable_uses_fallback_and_flags_unmatched() -> None:
     etype, matched = to_exercise_type("Frobnicator 3000", fallback=FALLBACK)
     assert etype == FALLBACK

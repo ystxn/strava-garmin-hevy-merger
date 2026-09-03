@@ -71,6 +71,8 @@ _RULES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("neutral grip", "lat pulldown"), "NEUTRAL_GRIP_LAT_PULLDOWN"),
     (("lat pulldown",), "LAT_PULLDOWN"),
     # ---- Rows: chest-supported and other specifics before the "row" catch-all.
+    (("iso-lateral high row",), "MACHINE_ISOLATERAL_HIGH_ROW"),
+    (("iso lateral high row",), "MACHINE_ISOLATERAL_HIGH_ROW"),
     (("chest supported row", "machine"), "MACHINE_CHEST_SUPPORTED_ROW"),
     (("chest-supported row", "machine"), "MACHINE_CHEST_SUPPORTED_ROW"),
     (("chest supported row",), "CHEST_SUPPORTED_ROW"),
