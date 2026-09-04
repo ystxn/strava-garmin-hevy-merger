@@ -155,6 +155,51 @@ def test_iso_lateral_high_row_maps_to_machine_enum() -> None:
         assert (etype, matched) == (expected, True), name
 
 
+def test_single_leg_dumbbell_rdl_and_calf_raise_and_pallof_press() -> None:
+    cases = {
+        "Single Leg Romanian Deadlift (Dumbbell)": "SINGLE_LEG_DUMBBELL_ROMANIAN_DEADLIFTS",
+        "Single Leg Standing Calf Raise (Dumbbell)": "SINGLE_LEG_DUMBBELL_STANDING_CALF_RAISE",
+        "Cable Core Pallof Press": "PALLOF_PRESS",
+    }
+    for name, expected in cases.items():
+        etype, matched = to_exercise_type(name, fallback=FALLBACK)
+        assert (etype, matched) == (expected, True), name
+    # Regression: the new single-leg-dumbbell RDL rule must not shadow the
+    # plain barbell/dumbbell/no-equipment Romanian deadlift rules.
+    assert to_exercise_type("Romanian Deadlift (Barbell)", fallback=FALLBACK) == (
+        "BARBELL_ROMANIAN_DEADLIFT",
+        True,
+    )
+    assert to_exercise_type("Romanian Deadlift (Dumbbell)", fallback=FALLBACK) == (
+        "DUMBBELL_ROMANIAN_DEADLIFTS",
+        True,
+    )
+    assert to_exercise_type("Single Leg Romanian Deadlift", fallback=FALLBACK) == (
+        "SINGLE_LEG_ROMANIAN_DEADLIFTS",
+        True,
+    )
+
+
+def test_bulgarian_split_squat_dumbbell_and_side_plank() -> None:
+    assert to_exercise_type(
+        "Bulgarian Split Squat (Dumbbell)", fallback=FALLBACK
+    ) == ("DUMBBELL_BULGARIAN_SPLIT_SQUATS", True)
+    assert to_exercise_type("Side Plank", fallback=FALLBACK) == (
+        "SIDE_PLANK",
+        True,
+    )
+    # Regression: barbell split squats still have no safe specific enum and
+    # must remain generic, not swallowed by the new dumbbell rule.
+    assert to_exercise_type("Bulgarian Split Squat (Barbell)", fallback=FALLBACK) == (
+        "SQUAT_GENERIC",
+        True,
+    )
+    assert to_exercise_type("Split Squat (Dumbbell)", fallback=FALLBACK) == (
+        "SQUAT_GENERIC",
+        True,
+    )
+
+
 def test_unmappable_uses_fallback_and_flags_unmatched() -> None:
     etype, matched = to_exercise_type("Frobnicator 3000", fallback=FALLBACK)
     assert etype == FALLBACK

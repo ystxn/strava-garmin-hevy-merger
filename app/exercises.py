@@ -43,6 +43,10 @@ _CURATED: dict[str, str] = {
 _RULES: tuple[tuple[tuple[str, ...], str], ...] = (
     # ---- Romanian deadlift (RDL): before the plain "deadlift" rules, since
     # "romanian deadlift" contains "deadlift". "rdl" is the common abbreviation.
+    # Single-leg variants must precede the two-leg barbell/dumbbell rules below,
+    # since "single leg romanian deadlift (dumbbell)" also contains "romanian
+    # deadlift" + "dumbbell" and would otherwise match those first.
+    (("single leg romanian deadlift", "dumbbell"), "SINGLE_LEG_DUMBBELL_ROMANIAN_DEADLIFTS"),
     (("romanian deadlift", "barbell"), "BARBELL_ROMANIAN_DEADLIFT"),
     (("rdl", "barbell"), "BARBELL_ROMANIAN_DEADLIFT"),
     (("romanian deadlift", "dumbbell"), "DUMBBELL_ROMANIAN_DEADLIFTS"),
@@ -90,7 +94,12 @@ _RULES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("row",), "ROW_GENERIC"),
     # ---- Twists / core ----
     (("russian twist",), "RUSSIAN_TWIST"),
+    (("pallof",), "PALLOF_PRESS"),
     (("twist",), "CORE_GENERIC"),
+    # ---- Plank ----
+    (("side plank",), "SIDE_PLANK"),
+    # ---- Calf raise ----
+    (("single leg", "standing calf raise", "dumbbell"), "SINGLE_LEG_DUMBBELL_STANDING_CALF_RAISE"),
     # ---- Hips ----
     (("hip abduction",), "HIP_STABILITY_GENERIC"),
     (("hip adduction",), "HIP_STABILITY_GENERIC"),
@@ -117,7 +126,9 @@ _RULES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("goblet squat",), "GOBLET_SQUAT"),
     (("box squat", "barbell"), "BARBELL_BOX_SQUAT"),
     # Split/Bulgarian squats: no safe barbell-specific enum, keep them generic
-    # so they don't get mis-mapped to a back squat by the rule below.
+    # so they don't get mis-mapped to a back squat by the rule below. Dumbbell
+    # Bulgarian split squats have their own specific enum though.
+    (("bulgarian split squat", "dumbbell"), "DUMBBELL_BULGARIAN_SPLIT_SQUATS"),
     (("split squat",), "SQUAT_GENERIC"),
     (("squat", "smith"), "SMITH_MACHINE_SQUAT"),
     (("back squat", "barbell"), "BARBELL_BACK_SQUAT"),
