@@ -34,6 +34,7 @@ from .logging_setup import (
     log_stage_event,
     log_unexpected_fields,
 )
+from .hevy import strip_hevy_attribution
 from .matcher import Matcher, PendingActivity, _utcnow
 from .merger import (
     MERGED_SPORT_TYPE,
@@ -728,7 +729,7 @@ async def run_merge(
         sport_type,
         external_id,
         hevy.name,
-        hevy.description,
+        strip_hevy_attribution(hevy.description),
         athlete_id,
         g_id,
         h_id,

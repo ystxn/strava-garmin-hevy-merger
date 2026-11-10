@@ -7,7 +7,7 @@ strength workouts. Hevy instead writes the workout into the free-text
 
 from __future__ import annotations
 
-from app.hevy import parse_hevy_sets
+from app.hevy import parse_hevy_sets, strip_hevy_attribution
 
 # The exact description shape Hevy writes (taken from a production webhook).
 REAL_DESCRIPTION = (
@@ -104,3 +104,19 @@ def test_activity_has_sets_false_for_plain_description() -> None:
         {"id": 1, "sets": [], "description": "Easy recovery ride"}
     )
     assert act.has_sets is False
+
+
+def test_strip_hevy_attribution_removes_line_and_two_breaks() -> None:
+    desc = "Logged with hevyapp.com\n\nDeadlift (Barbell)\nSet 1: 55 kg x 6"
+    assert strip_hevy_attribution(desc) == "Deadlift (Barbell)\nSet 1: 55 kg x 6"
+
+
+def test_strip_hevy_attribution_only_removes_up_to_two_breaks() -> None:
+    assert strip_hevy_attribution("Logged with hevyapp.com\n\n\nSquat") == "\nSquat"
+    assert strip_hevy_attribution("Logged with hevyapp.com\r\n\r\nSquat") == "Squat"
+
+
+def test_strip_hevy_attribution_passthrough_and_empty() -> None:
+    assert strip_hevy_attribution(None) is None
+    assert strip_hevy_attribution("Leg day") == "Leg day"
+    assert strip_hevy_attribution("Logged with hevyapp.com\n\n") is None

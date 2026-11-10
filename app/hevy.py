@@ -27,6 +27,10 @@ from typing import Any
 # Marker Hevy stamps on every exported description.
 _HEVY_MARKER = "hevyapp.com"
 
+# Hevy's attribution line plus up to two line breaks after it, stripped from the
+# description we put on the merged activity.
+_HEVY_ATTRIBUTION = re.compile(r"Logged with hevyapp\.com[ \t]*(?:\r?\n){0,2}", re.IGNORECASE)
+
 # A set line looks like "Set 1: 55 kg x 6" (the leading label may be "Set N",
 # "Warmup N", etc.). We treat anything up to the first colon as the label.
 _SET_LINE = re.compile(r"^\s*(?:set|warm\s*up)\b[^:]*:\s*(?P<detail>.+)$", re.IGNORECASE)
@@ -97,3 +101,12 @@ def parse_hevy_sets(description: str | None) -> list[dict[str, Any]]:
             current_exercise = line
 
     return sets
+
+
+def strip_hevy_attribution(description: str | None) -> str | None:
+    """Remove Hevy's "Logged with hevyapp.com" line and the (up to two) line
+    breaks that follow it. Returns ``None`` if nothing else remains."""
+    if not description:
+        return description
+    stripped = _HEVY_ATTRIBUTION.sub("", description, count=1)
+    return stripped if stripped.strip() else None

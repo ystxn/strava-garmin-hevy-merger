@@ -262,7 +262,8 @@ async def test_full_merge_flow_uploads_and_keeps_originals() -> None:
         fields = _multipart_parts(request)
         assert fields["external_id"].decode().startswith("merged-111-222-")
         assert fields["name"].decode() == "Strength B"
-        assert b"hevyapp.com" in fields["description"]
+        # Hevy's attribution line and its trailing blank line are stripped.
+        assert fields["description"].decode() == "Bench Press\nSet 1: 80 kg x 5"
 
         # Originals are left intact: no delete is attempted; merged id remembered.
         assert not del_route.called
